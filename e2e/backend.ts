@@ -22,6 +22,13 @@ process.env.TABLE_NAME = "e2e-table";
 const { handler, setDocClient } = await import("../api/src/handler");
 const { FakeDocClient } = await import("../api/src/testing/fakeDynamo");
 const { appSyncEvent } = await import("../api/src/testing/harness");
+const { setClock } = await import("../api/src/clock");
+
+/** Run the server on a check's faked clock: server now = `start` plus the real time passed since this call. */
+export function setServerClock(start: string | Date) {
+  const skew = new Date(start).getTime() - Date.now();
+  setClock(() => Date.now() + skew);
+}
 
 export const db = new FakeDocClient();
 setDocClient(db);

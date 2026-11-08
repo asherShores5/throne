@@ -49,7 +49,7 @@ code and UI.
 ## Layout (built so tickets can work in parallel)
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
-  new-Profile defaults), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  new-Profile defaults; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -58,7 +58,10 @@ code and UI.
 - `api/src/`: `handler.ts` (caller = Cognito `sub`, then dispatch by field name), `table.ts` (key layout,
   document client seam), `resolvers/<entity>.ts` (one `ResolverModule` per entity, merged in
   `resolvers/index.ts`). `resolvers/profile.ts` has `ensureProfile(ctx, zone)`, which later resolvers can
-  call to get the caller's Profile.
+  call to get the caller's Profile. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
+  Profile is one key range, `myLogs(from, to)`), plus `LOGID#<id>` (id lookup + idempotent create) and
+  `LOGDAY#<Day>` (count for the 50-a-Day cap), always written together in one transaction. `clock.ts`: server
+  time for the time rules (seam for e2e).
 - `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table) and
   `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
   refuses un-aliased attribute names and unused placeholders).
@@ -70,11 +73,12 @@ code and UI.
   table only (asserted in `infra/test/stacks.test.ts`).
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
-  `views/` (`Login`, `Home`). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  `views/` (`Login`, `Home`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
-  fake Cognito, AppSync's depth cap), launcher `app.ts`, helpers `lib.ts`, checks per area (`smoke.ts`).
+  fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
+  (`smoke.ts`, `log.ts`).
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -91,5 +95,9 @@ code and UI.
   trigger would let anyone make an account.
 - **Health data**: never log arguments, results, Notes or Details (handler logs only error name/message;
   AppSync logs errors without content).
+- **Time**: server rules use `now()` from `api/src/clock.ts`, never `Date.now()` directly. An e2e check that
+  fakes the page clock (`open(u, { clock })`) must also call `setServerClock` with the same start, or the
+  server judges "future" and "7 days old" by the real clock. A Log's Day is fixed by its own Log zone; never
+  re-bucket Logs by the current Home zone.
 - **Passkeys**: the relying party is `APP_DOMAIN` (`throne.ashershores.com`), so passkeys only work there,
   and changing it orphans every passkey.
