@@ -1,0 +1,8 @@
+# Root types. Each entity file adds its fields with `extend type Query/Mutation` (see compose.ts).
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query
+type Mutation

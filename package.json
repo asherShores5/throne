@@ -1,0 +1,12 @@
+{
+  "name": "throne",
+  "private": true,
+  "workspaces": ["shared", "api", "infra", "web"],
+  "scripts": {
+    "test": "npm test -w shared -w api -w web -w infra",
+    "typecheck": "npm run typecheck -w shared -w api -w web -w infra",
+    "build:web": "npm run build -w web",
+    "synth": "npm run synth -w infra",
+    "deploy": "npm run build:web && npm run deploy -w infra"
+  }
+}

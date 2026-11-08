@@ -1,0 +1,6 @@
+{
+  "region": "us-west-1",
+  "userPoolId": "us-west-1_EXAMPLE",
+  "clientId": "example-client-id",
+  "graphqlUrl": "https://example.appsync-api.us-west-1.amazonaws.com/graphql"
+}

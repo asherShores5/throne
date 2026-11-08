@@ -5,3 +5,4 @@ cdk.out/
 .secrets/
 *.log
 .env*
+web/public/config.json

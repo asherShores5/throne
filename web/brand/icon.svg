@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#5b3fd6"/>
+  <!-- A crown: the Throne mark. It sits inside the maskable safe zone, so a full-bleed copy (no rx) is the maskable and Apple icon. -->
+  <path d="M112 352 L96 176 L184 248 L256 136 L328 248 L416 176 L400 352 Z" fill="#ffd34d" stroke="#ffd34d" stroke-width="16" stroke-linejoin="round"/>
+  <rect x="112" y="368" width="288" height="40" rx="14" fill="#ffd34d"/>
+  <circle cx="96" cy="168" r="22" fill="#ffd34d"/>
+  <circle cx="256" cy="124" r="22" fill="#ffd34d"/>
+  <circle cx="416" cy="168" r="22" fill="#ffd34d"/>
+</svg>

@@ -1,0 +1,124 @@
+import { App } from "aws-cdk-lib";
+import { Match, Template } from "aws-cdk-lib/assertions";
+import { beforeAll, describe, expect, it } from "vitest";
+import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
+import { buildApp } from "../lib/app";
+
+// One synth for the whole file: bundling the API Lambda with esbuild is the slow part.
+let app: Template;
+beforeAll(() => {
+  app = Template.fromStack(buildApp(new App(), { region: "us-west-1" }).app);
+}, 120_000);
+
+describe("data", () => {
+  it("one PK/SK table, on demand, with point-in-time recovery, deletion protection and RETAIN", () => {
+    app.resourceCountIs("AWS::DynamoDB::GlobalTable", 1);
+    app.hasResource("AWS::DynamoDB::GlobalTable", {
+      DeletionPolicy: "Retain",
+      Properties: Match.objectLike({
+        KeySchema: [{ AttributeName: "PK", KeyType: "HASH" }, { AttributeName: "SK", KeyType: "RANGE" }],
+        BillingMode: "PAY_PER_REQUEST",
+        Replicas: [Match.objectLike({
+          DeletionProtectionEnabled: true,
+          PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+        })],
+      }),
+    });
+  });
+
+  it("the API Lambda gets only single-item and query actions on the table (no Scan, no Batch*)", () => {
+    const [roleId] = Object.keys(app.findResources("AWS::IAM::Role")).filter((id) => id.startsWith("ApiFn"));
+    const statements = Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+      .filter((st: any) => [st.Action].flat().some((a: string) => a.startsWith("dynamodb:")));
+    expect(statements).toHaveLength(1);
+    expect([statements[0].Action].flat().sort()).toEqual(["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]);
+    const [tableId] = Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"));
+    expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
+  });
+
+  it("one Lambda handler for the API (plus CDK's own log-retention helpers, if any)", () => {
+    const fns = Object.values(app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Environment?.Variables?.TABLE_NAME);
+    expect(fns).toHaveLength(1);
+    expect(fns[0].Properties.Runtime).toBe("nodejs22.x");
+    expect(fns[0].Properties.Architectures).toEqual(["arm64"]);
+  });
+});
+
+describe("auth", () => {
+  it("no self sign-up yet (ticket 02 opens it behind the Invite trigger); password and passkey sign-in", () => {
+    app.hasResourceProperties("AWS::Cognito::UserPool", {
+      AdminCreateUserConfig: { AllowAdminCreateUserOnly: true },
+      UserPoolTier: "ESSENTIALS",
+    });
+    const [pool] = Object.values(app.findResources("AWS::Cognito::UserPool"));
+    expect([...pool.Properties.Policies.SignInPolicy.AllowedFirstAuthFactors].sort()).toEqual(["PASSWORD", "WEB_AUTHN"]);
+    expect(pool.Properties.WebAuthnRelyingPartyID).toBe("throne.ashershores.com");
+    expect(pool.Properties.WebAuthnUserVerification).toBe("required");
+    expect(pool.Properties.Policies.PasswordPolicy.MinimumLength).toBeGreaterThanOrEqual(16);
+  });
+
+  it("the web client signs in through USER_AUTH (password or passkey) and refresh only", () => {
+    const [client] = Object.values(app.findResources("AWS::Cognito::UserPoolClient"));
+    expect([...client.Properties.ExplicitAuthFlows].sort()).toEqual(["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_AUTH"]);
+    expect(client.Properties.PreventUserExistenceErrors).toBe("ENABLED");
+  });
+
+  it("tokens last an hour and the session (refresh token) 7 days", () => {
+    app.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      GenerateSecret: false,
+      AccessTokenValidity: 60,
+      IdTokenValidity: 60,
+      RefreshTokenValidity: 7 * 24 * 60,
+    });
+  });
+
+  it("the API takes Cognito user-pool tokens only (no API key, no IAM, no other provider)", () => {
+    app.hasResourceProperties("AWS::AppSync::GraphQLApi", {
+      AuthenticationType: "AMAZON_COGNITO_USER_POOLS",
+      AdditionalAuthenticationProviders: Match.absent(),
+    });
+    app.resourceCountIs("AWS::AppSync::ApiKey", 0);
+  });
+});
+
+describe("API", () => {
+  it("doesn't describe itself and caps query depth and resolvers per request", () => {
+    app.hasResourceProperties("AWS::AppSync::GraphQLApi", { IntrospectionConfig: "DISABLED" });
+    const [api] = Object.values(app.findResources("AWS::AppSync::GraphQLApi"));
+    expect(api.Properties.QueryDepthLimit).toBe(QUERY_DEPTH_LIMIT);
+    expect(api.Properties.ResolverCountLimit).toBeLessThanOrEqual(5);
+  });
+
+  it("counts query depth the way AppSync does (root field = 1)", () => {
+    expect(queryDepth("query { me { id } }")).toBe(2);
+    expect(queryDepth("query { a { ... on X { b { c } } } }")).toBe(3);
+    expect(queryDepth("query Q { me { ...P } } fragment P on Profile { avatar { emoji } }")).toBe(3);
+  });
+
+  it("the depth cap is exactly the deepest selection the app sends (the Profile's Avatar)", () => {
+    // web/src/api/profile.ts selects `me { ... avatar { emoji color } }`; e2e/backend.ts refuses anything
+    // deeper than the cap, as AppSync does. Raise the cap when a real selection needs it, never "just in case".
+    expect(queryDepth("query Me($z: String) { me(homeZone: $z) { id displayName homeZone avatar { emoji color } } }")).toBe(QUERY_DEPTH_LIMIT);
+  });
+
+  it("has a Lambda resolver for every Query and Mutation field in schema/", () => {
+    const fields = rootFields(composeSchemaDir());
+    const wired = Object.values(app.findResources("AWS::AppSync::Resolver")).map((r) => `${r.Properties.TypeName}.${r.Properties.FieldName}`);
+    const expected = [...fields.Query.map((f) => `Query.${f}`), ...fields.Mutation.map((f) => `Mutation.${f}`)];
+    expect(wired.sort()).toEqual(expected.sort());
+  });
+
+  it("logs errors only, without request or response content (health data)", () => {
+    app.hasResourceProperties("AWS::AppSync::GraphQLApi", {
+      LogConfig: Match.objectLike({ FieldLogLevel: "ERROR", ExcludeVerboseContent: true }),
+    });
+  });
+});
+
+describe("public repo hygiene", () => {
+  it("synths with no AWS account ID in the template", () => {
+    expect(JSON.stringify(app.toJSON())).not.toMatch(/\b\d{12}\b/);
+  });
+});
