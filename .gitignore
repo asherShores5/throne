@@ -6,3 +6,4 @@ cdk.out/
 *.log
 .env*
 web/public/config.json
+.claude/worktrees/
