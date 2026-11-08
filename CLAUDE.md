@@ -33,3 +33,63 @@ code and UI.
 - Stack mirrors `../honeydo` and `../nutrisage` (TS workspaces shared/api/web/infra + schema,
   CDK, AppSync + one Lambda, DynamoDB, Cognito, PWA, us-west-1). Reuse their patterns before
   inventing new ones. Pin `AWS_REGION=us-west-1 AWS_DEFAULT_REGION=us-west-1` before synth/diff.
+
+## Commands (repo root)
+
+- `npm install` once (workspaces). `e2e/` is not a workspace: `cd e2e && npm install && npx playwright install chromium`.
+- `npm test`: vitest in shared, api, web and infra.
+- `npm run typecheck`: tsc in every workspace (web also checks the service worker).
+- `npm run build:web`: typecheck + Vite build to `web/dist` (needed by e2e and by a hosted synth).
+- `npm run synth`: `cdk synth`. Pin the region first:
+  `AWS_REGION=us-west-1 AWS_DEFAULT_REGION=us-west-1 npm run synth` (the dev desktop sets
+  AWS_REGION=us-west-2 globally). Needs no AWS credentials; with no hosting config it builds only the app stack.
+- e2e (after `build:web`): `cd e2e && npx tsx smoke.ts`. Screenshots go to `/tmp/e2e-throne-<checkout folder>/`.
+  Look at them; passing DOM checks miss layout bugs. See `e2e/README.md`.
+
+## Layout (built so tickets can work in parallel)
+
+- `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
+  new-Profile defaults), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  Summary math, Awards, Friend codes, limits) goes here with a vitest test.
+- `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
+  `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
+  for AppSync and the e2e backend (a root type with no fields yet is left out) and owns `QUERY_DEPTH_LIMIT`
+  and `queryDepth()`. Use `#` comments, not `"descriptions"` (a schema test enforces it).
+- `api/src/`: `handler.ts` (caller = Cognito `sub`, then dispatch by field name), `table.ts` (key layout,
+  document client seam), `resolvers/<entity>.ts` (one `ResolverModule` per entity, merged in
+  `resolvers/index.ts`). `resolvers/profile.ts` has `ensureProfile(ctx, zone)`, which later resolvers can
+  call to get the caller's Profile.
+- `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table) and
+  `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
+  refuses un-aliased attribute names and unused placeholders).
+- `infra/lib/`: `stacks.ts` (AppStack: table, Cognito, AppSync + Lambda, budget), `hosting.ts` (CertStack,
+  WebStack: S3 + CloudFront with the CSP from `csp.ts`), `ci.ts` (CiStack: the GitHub OIDC deploy role),
+  `config.ts` (zone/account from context or env), `app.ts` (wires them; Cert/Web/Ci only with hosting
+  config). An AppSync resolver is created for every Query/Mutation field in the composed schema, so a new
+  field needs only its schema line and its resolver. The Lambda gets Get/Put/Update/Delete/Query on the
+  table only (asserted in `infra/test/stacks.test.ts`).
+- `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
+  `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
+  `views/` (`Login`, `Home`). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
+  `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
+- `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
+  fake Cognito, AppSync's depth cap), launcher `app.ts`, helpers `lib.ts`, checks per area (`smoke.ts`).
+  The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
+
+## Gotchas that will bite you
+
+- **Identity is the Cognito `sub`** (`Ctx.sub`). Never read a Profile ID for the caller from arguments.
+  Partitions are `PROFILE#<sub>`; the Profile record is `PROFILE#<sub>` / `PROFILE`.
+- **Alias every attribute name** in every DynamoDB expression (`#status`, `#pk`, ...). The fake throws on a
+  bare name or an unused `#name`/`:value`; live DynamoDB would throw on reserved words.
+- **`QUERY_DEPTH_LIMIT` is the deepest real selection** (`me > avatar > emoji` = 3 now). A ticket that sends
+  a deeper one raises it and updates the pinned test in `infra/test/stacks.test.ts`; e2e refuses deeper queries.
+- **The handler reads env at import time**: tests and e2e import it through `api/src/testing/harness.ts` /
+  `e2e/backend.ts`, which set the env first. Never import it statically in a test.
+- **Self sign-up is off** until ticket 02 adds the Invite pre-sign-up trigger; turning it on without that
+  trigger would let anyone make an account.
+- **Health data**: never log arguments, results, Notes or Details (handler logs only error name/message;
+  AppSync logs errors without content).
+- **Passkeys**: the relying party is `APP_DOMAIN` (`throne.ashershores.com`), so passkeys only work there,
+  and changing it orphans every passkey.

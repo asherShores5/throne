@@ -1,0 +1,15 @@
+# Monthly, grouped: one PR per ecosystem with minor and patch updates, so fixes arrive without
+# noise. Major versions are upgrades to do on purpose, not via a bot. (Same as NutriSage.)
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups: { actions: { patterns: ["*"] } }
+    ignore: [{ dependency-name: "*", update-types: ["version-update:semver-major"] }]
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: monthly }
+    groups: { npm: { patterns: ["*"] } }
+    ignore: [{ dependency-name: "*", update-types: ["version-update:semver-major"] }]
+    open-pull-requests-limit: 2

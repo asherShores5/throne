@@ -1,0 +1,23 @@
+# The caller's own Profile (ticket 01). Resolvers: api/src/resolvers/profile.ts.
+# Plain comments, not "descriptions": AppSync has rejected described types before.
+
+# An emoji on a color that stands for a Profile (shared/src/profile.ts has the choices).
+type Avatar {
+  emoji: String!
+  color: String!
+}
+
+type Profile {
+  # The Profile's id (its Cognito sub).
+  id: ID!
+  displayName: String!
+  avatar: Avatar!
+  # IANA time zone name, e.g. America/Los_Angeles.
+  homeZone: String!
+}
+
+extend type Query {
+  # The caller's Profile. The first call by a new sign-in creates it (placeholder Display name,
+  # default Avatar, Home zone from `homeZone`, the device's zone; UTC if that isn't a zone name).
+  me(homeZone: String): Profile!
+}
