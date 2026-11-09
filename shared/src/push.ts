@@ -182,3 +182,8 @@ export function eventPushPayload(e: PushEvent, fromName: string): PushPayload {
       return p(`${fromName} logged`, pushLinks.day(e.day, e.from));
   }
 }
+
+/** The weekly Summary push: no counts or names (it can show on a lock screen), just a way in. */
+export function summaryPushPayload(): PushPayload {
+  return { title: TITLE, body: "Last week's Summary is ready", data: { kind: "summary", url: pushLinks.summary } };
+}
