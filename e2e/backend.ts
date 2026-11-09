@@ -21,7 +21,9 @@ export const USERS: Record<string, User> = {
 process.env.TABLE_NAME = "e2e-table";
 const { handler, setDocClient } = await import("../api/src/handler");
 const { FakeDocClient } = await import("../api/src/testing/fakeDynamo");
-const { appSyncEvent } = await import("../api/src/testing/harness");
+const { appSyncEvent, preSignUpEvent } = await import("../api/src/testing/harness");
+// The real Invite check (Cognito's pre-sign-up trigger), on the same fake table.
+const { handler: preSignUp } = await import("../api/src/preSignUp");
 
 export const db = new FakeDocClient();
 setDocClient(db);
@@ -83,10 +85,29 @@ export function setPasskeys(username: string, ids: string[]) {
 }
 export const passkeysOf = (username: string) => passkeys.get(username) ?? [];
 
-export function cognito(target: string, body: any): { status: number; json: unknown } {
+/** Passwords of users made by SignUp in this run (the seeded USERS all use PASSWORD). */
+const signedUpPasswords = new Map<string, string>();
+const passwordOk = (u: string, p: unknown) => (signedUpPasswords.has(u) ? signedUpPasswords.get(u) === p : p === PASSWORD);
+
+export async function cognito(target: string, body: any): Promise<{ status: number; json: unknown }> {
   const fail = (type: string, message: string) => ({ status: 400, json: { __type: type, message } });
   const wrong = () => fail("NotAuthorizedException", "Incorrect username or password.");
   switch (target) {
+    case "SignUp": {
+      // Like Cognito: the username and password policy are checked first, then the pre-sign-up trigger.
+      const u = String(body.Username ?? "");
+      if (USERS[u]) return fail("UsernameExistsException", "User already exists");
+      if (String(body.Password ?? "").length < 16) return fail("InvalidPasswordException", "Password did not conform with policy: Password not long enough");
+      try {
+        const out = await preSignUp(preSignUpEvent(body.ClientMetadata?.inviteToken, u));
+        if (!out.response.autoConfirmUser) return fail("NotImplemented", "fake Cognito only takes auto-confirmed sign-ups");
+      } catch (e) {
+        return fail("UserLambdaValidationException", `PreSignUp failed with error ${(e as Error).message}.`);
+      }
+      USERS[u] = { sub: `sub-${u}`, username: u };
+      signedUpPasswords.set(u, body.Password);
+      return { status: 200, json: { UserConfirmed: true, UserSub: USERS[u].sub } };
+    }
     case "InitiateAuth": {
       if (body.AuthFlow === "REFRESH_TOKEN_AUTH") {
         const u = String(body.AuthParameters?.REFRESH_TOKEN ?? "").replace(/^fake-refresh\./, "");
@@ -103,7 +124,7 @@ export function cognito(target: string, body: any): { status: number; json: unkn
         return { status: 200, json: { ChallengeName: "WEB_AUTHN", Session: session, ChallengeParameters: { CREDENTIAL_REQUEST_OPTIONS: JSON.stringify(options) } } };
       }
       // preventUserExistenceErrors: an unknown user looks like a wrong password.
-      if (!USERS[u] || body.AuthParameters?.PASSWORD !== PASSWORD) return wrong();
+      if (!USERS[u] || !passwordOk(u, body.AuthParameters?.PASSWORD)) return wrong();
       return { status: 200, json: tokensFor(u) };
     }
     case "RespondToAuthChallenge": {

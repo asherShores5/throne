@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AVATAR_COLORS, AVATAR_EMOJI, DEFAULT_HOME_ZONE, homeZoneOr, isHomeZone, newProfile } from "./profile";
+import { AVATAR_COLORS, AVATAR_EMOJI, DEFAULT_HOME_ZONE, cleanDisplayName, homeZoneOr, isAvatar, isHomeZone, newProfile } from "./profile";
 
 describe("Avatar choices", () => {
   it("a fixed palette of 8 distinct colors and a fixed list of distinct emoji", () => {
@@ -36,5 +36,25 @@ describe("newProfile", () => {
       homeZone: "America/Denver",
     });
     expect(newProfile("bogus").homeZone).toBe("UTC");
+  });
+});
+
+describe("Display name", () => {
+  it("trims and keeps 1 to 24 characters, counting an emoji as one", () => {
+    expect(cleanDisplayName("  Sam  ")).toBe("Sam");
+    expect(cleanDisplayName("A".repeat(24))).toBe("A".repeat(24));
+    expect(cleanDisplayName("👑".repeat(24))).toBe("👑".repeat(24));
+  });
+
+  it("refuses empty, too long, control characters and non-strings", () => {
+    for (const n of ["", "   ", "A".repeat(25), "👑".repeat(25), "Sam\nX", "a\u0000b", 7, null, undefined]) expect(cleanDisplayName(n)).toBeUndefined();
+  });
+});
+
+describe("Avatar", () => {
+  it("accepts only an emoji from the list on a color from the palette", () => {
+    expect(isAvatar({ emoji: "🦆", color: "#2b8a3e" })).toBe(true);
+    for (const a of [{ emoji: "💩", color: "#2b8a3e" }, { emoji: "🦆", color: "#000000" }, { emoji: "🦆" }, null, "🦆", { emoji: "🦆", color: "#2b8a3e", x: 1 }])
+      expect(isAvatar(a)).toBe(false);
   });
 });

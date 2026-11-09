@@ -50,6 +50,8 @@ export interface OpenOptions {
   serviceWorkers?: boolean;
   /** Fake the page's clock from this moment (Playwright clock: timers and Date; time keeps running). */
   clock?: Date | string;
+  /** Open this path (and #hash) instead of "/", e.g. an Invite link's "/invite#<token>". */
+  path?: string;
 }
 
 export async function launch() {
@@ -102,7 +104,7 @@ export async function launch() {
     });
     await context.route("https://cognito-idp.us-west-1.amazonaws.com/", async (route) => {
       const target = (route.request().headers()["x-amz-target"] ?? "").split(".").pop()!;
-      const r = cognito(target, route.request().postDataJSON());
+      const r = await cognito(target, route.request().postDataJSON());
       return route.fulfill({ status: r.status, contentType: "application/x-amz-json-1.1", body: JSON.stringify(r.json) });
     });
     await context.route(GRAPHQL_URL, async (route) => {
@@ -110,7 +112,7 @@ export async function launch() {
       return route.fulfill({ json: await graphql(route.request().headers()["authorization"], query, variables) });
     });
 
-    await page.goto(ORIGIN + "/");
+    await page.goto(ORIGIN + (opts.path ?? "/"));
     return page;
   }
 

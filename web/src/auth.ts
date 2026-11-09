@@ -107,6 +107,31 @@ export async function signInWithPassword(username: string, password: string) {
   accept(r, u);
 }
 
+/** The Invite was unknown, expired, revoked or already used (the pre-sign-up trigger said no). */
+export class InviteRefusedError extends Error {
+  constructor() {
+    super("This Invite can't be used. Ask for a new Invite.");
+  }
+}
+
+/**
+ * Create a Profile's sign-in from an Invite link, then sign in with it. The token goes as
+ * ClientMetadata to the pre-sign-up trigger (api/src/preSignUp.ts), which spends the Invite and
+ * auto-confirms. Check the form first (shared/src/signUp.ts): a refused request may still spend it.
+ */
+export async function signUpWithInvite(inviteToken: string, username: string, password: string) {
+  const { clientId } = getConfig();
+  const u = username.trim().toLowerCase();
+  try {
+    await cognito("SignUp", { ClientId: clientId, Username: u, Password: password, ClientMetadata: { inviteToken } });
+  } catch (e) {
+    if (e instanceof CognitoError && e.type === "UserLambdaValidationException") throw new InviteRefusedError();
+    if (e instanceof CognitoError && e.type === "UsernameExistsException") throw new Error("That username is taken. Pick another.");
+    throw e;
+  }
+  await signInWithPassword(u, password);
+}
+
 /** The browser's passkey prompt; a cancel or timeout (NotAllowedError) reads plainly. */
 async function webauthn<T>(prompt: () => Promise<T>): Promise<T> {
   try {
