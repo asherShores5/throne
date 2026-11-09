@@ -61,8 +61,9 @@ code and UI.
   `resolvers/index.ts`). `resolvers/profile.ts` has `ensureProfile(ctx, zone)`, which later resolvers can
   call to get the caller's Profile (it also moves the Home zone with the device unless the Profile pinned one;
   `updateProfile` edits it; the first call also writes the Profile's directory entry `PROFILES` / `PROFILE#<sub>` in the
-  same transaction, and `profileIds()` lists them, so the hourly run needs no Scan; ticket 11 must delete the entry too). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
-  Profile (`INVITESLOT#1-3`, claimed in a transaction, so the cap holds under races). `preSignUp.ts`: the Cognito
+  same transaction, and `profileIds()` lists them, so the hourly run needs no Scan; Delete Profile deletes it). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
+  Profile (`INVITESLOT#1-3`, claimed in a transaction, so the cap holds under races). An Invite item exists only while
+  a place holds it (re-using a place deletes the spent one, revoking deletes it; no `usedBy`), so `forgetInvitesOf` finds all. `preSignUp.ts`: the Cognito
   pre-sign-up trigger (its own Lambda) that spends an open Invite with one conditional write. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
   Profile is one key range, `myLogs(from, to)`; a Friend's the same way via `friendLogs(friend, from, to)` behind `requireFriend`), plus `LOGID#<id>` (id lookup + idempotent create) and
   `LOGDAY#<Day>` (count for the 50-a-Day cap), always written together in one transaction. `clock.ts`: server
@@ -89,8 +90,17 @@ code and UI.
   Profile in the directory that `dueSummaryWeek` says is due, `resolvers/summary.ts` builds the Summary (them + current
   Friends, each person's Logs on their own Days via `logItems`, names/Avatars snapshotted) and stores it at
   `SUMMARY#<weekStart>` with `attribute_not_exists`: that write is the claim, and only the winning run pushes (if
-  the Profile's Summary push is on). `summaries` (Query) reads only the caller's own, newest first (104 max). `vapid.ts` + `vapidKeysProvider.ts`: the VAPID
+  the Profile's Summary push is on). The claim is one transaction that also writes `INSUMMARY#<owner>#<weekStart>`
+  under every other person in it and checks nobody in it has a `DELETED` marker (refused: rebuilt without them).
+  `summaries` (Query) reads only the caller's own, newest first (104 max). `vapid.ts` + `vapidKeysProvider.ts`: the VAPID
   key custom resource (SSM `/throne/vapid/*`, never overwritten).
+  `resolvers/deleteProfile.ts` (ticket 11): `deleteProfile` puts the content-free `PROFILE#<sub>` / `DELETED` marker
+  first (from then on `handler.ts` refuses every other call of that sub with `ProfileDeleted`), then the directory
+  entry, `forgetFriendsOf` (friend.ts: code, requests, Friendships + Reactions/Comments both ways), `forgetInvitesOf`,
+  `scrubFromSummaries` (their row + Awards out of others' stored Summaries via the INSUMMARY pointers) and
+  `forgetOwnSummaries`, a sweep of the whole partition, the Cognito user (`cognito.ts`, AdminDeleteUser, `Ctx.username`
+  from the token; seam `setUserDeleter`), then `ttl` on the marker (table TTL attribute `ttl`, epoch seconds, a day).
+  Each step is safe to repeat; a stopped run is finished by calling it again (the test stops it after every write).
 - `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table; it also
   captures push events, `h.deliver()` runs the real Notifier on them with a fake push service, `h.takePushes()`) and
   `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
@@ -99,9 +109,10 @@ code and UI.
   WebStack: S3 + CloudFront with the CSP from `csp.ts`), `ci.ts` (CiStack: the GitHub OIDC deploy role),
   `config.ts` (zone/account from context or env), `app.ts` (wires them; Cert/Web/Ci only with hosting
   config). An AppSync resolver is created for every Query/Mutation field in the composed schema, so a new
-  field needs only its schema line and its resolver. The Lambda gets Get/Put/Update/Delete/Query on the
-  table and `lambda:InvokeFunction` on the Notifier only, no SSM (asserted in `infra/test/stacks.test.ts`). The
-  Notifier gets Get/Query/Delete/Put on the table (Put only for the conditional Summary write) and `ssm:GetParameter`
+  field needs only its schema line and its resolver. The Lambda gets Get/Put/Update/Delete/Query/ConditionCheckItem on the
+  table, `lambda:InvokeFunction` on the Notifier and `cognito-idp:AdminDeleteUser` on this pool only (env `USER_POOL_ID`;
+  no cycle, the pool's trigger is the separate pre-sign-up Lambda), no SSM (asserted in `infra/test/stacks.test.ts`). The
+  Notifier gets Get/Query/Delete/Put/ConditionCheckItem on the table (Put + ConditionCheck only for the Summary claim) and `ssm:GetParameter`
   on the two VAPID parameters; its async invokes are never retried. An EventBridge Scheduler schedule (`NotifierHourly`,
   cron minute 0 UTC, retryAttempts 0, input `SCHEDULED_RUN`) invokes it through a role that may only invoke it. `config.json` gets `vapidPublicKey` from the VapidKeys resource.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
@@ -113,11 +124,15 @@ code and UI.
   `vite.config.ts`; it also shows pushes and opens their link (`src/deepLink.ts`: `notificationFor`, `clickPlan`,
   the `navigate` message App.tsx follows; no imports, the worker build takes plain modules). Push glue:
   `notifications.ts` (enable inside the click handler, disable, sign-out `releaseThisDevice`), pure `push.ts`,
-  `pushDevice.ts`, `timeout.ts` (from HoneyDo); `views/Notifications.tsx` is the Settings section. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
+  `pushDevice.ts`, `timeout.ts` (from HoneyDo); `views/Notifications.tsx` is the Settings section. Delete Profile:
+  Settings' last card (type "delete", shared `isDeleteConfirmed`), `account.ts` (`deleteMyProfile`; also registered with
+  `gql.ts onProfileDeleted`, so any `ProfileDeleted` answer finishes a stopped deletion), pure `forgetProfileHere`
+  (`forgetProfile.ts`) over the per-Profile keys in `storageKeys.ts`, then sign-out and a notice on Login. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`, `push.ts`, `summary.ts` (`runSchedule(at)` in `backend.ts` runs the real Notifier's hourly run); `open(u, { serviceWorkers: true, fakePush: true })` gives a stand-in push service); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`, `push.ts`, `summary.ts` (`runSchedule(at)` in `backend.ts` runs the real Notifier's hourly run), `deleteProfile.ts`
+  (fake Cognito's `deletedUsers` can't sign in); `open(u, { serviceWorkers: true, fakePush: true })` gives a stand-in push service); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -153,5 +168,11 @@ code and UI.
 - **Push text never carries Details, Comment text or Reaction emoji**: build it in shared `eventPushPayload`
   from the event kind + a Display name only. Emit an event only after the write commits and only when
   something changed (a retry or no-op emits nothing). The API Lambda must never get SSM access.
+- **Delete Profile must keep finding everything**: an item that holds a Profile's data or names them outside their own
+  partition needs a pointer in their partition (like `RESPFROM#`, `INSUMMARY#`, `INVITESLOT#`) and a step in
+  `resolvers/deleteProfile.ts`; add it to the seed in `api/src/deleteProfile.test.ts`, which fails on any leftover
+  naming them. Never store a username on someone else's item. New per-Profile localStorage keys go in
+  `web/src/storageKeys.ts` and `forgetProfileHere`.
+- **A transaction's ConditionCheck needs `dynamodb:ConditionCheckItem`** in IAM (the fake doesn't check IAM).
 - **Passkeys**: the relying party is `APP_DOMAIN` (`throne.ashershores.com`), so passkeys only work there,
   and changing it orphans every passkey.
