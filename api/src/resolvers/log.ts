@@ -41,6 +41,14 @@ const MAX_RANGE_DAYS = 42;
 export const RESPONSE_POINTER_PREFIX = "RESPFROM#";
 export const responsePointerSk = (author: string, logId: string) => `${RESPONSE_POINTER_PREFIX}${author}#${logId}`;
 
+/**
+ * The same pair seen from the author's side, in the author's partition (ticket 12): always written and deleted in the
+ * same transaction as the RESPFROM pointer, so Delete Profile also finds what the author left on Logs of someone who
+ * is no longer their Friend (an endFriendship that stopped half way and was never retried).
+ */
+export const RESPONSE_TO_PREFIX = "RESPTO#";
+export const responseToKey = (author: string, owner: string, logId: string) => ({ PK: profilePk(author), SK: `${RESPONSE_TO_PREFIX}${owner}#${logId}` });
+
 export const idSk = (id: string) => `LOGID#${id}`;
 const daySk = (day: string) => `LOGDAY#${day}`;
 const CAP_MESSAGE = `${LOGS_PER_DAY_MAX} Logs a Day is the limit.`;
@@ -272,7 +280,10 @@ async function deleteLog(ctx: Ctx, input: Record<string, unknown>): Promise<stri
               },
             },
             countDown(pk, rec.day as string),
-            ...responders(rec).map((author) => ({ Delete: { TableName: TABLE, Key: { PK: pk, SK: responsePointerSk(author, id) } } })),
+            ...responders(rec).flatMap((author) => [
+              { Delete: { TableName: TABLE, Key: { PK: pk, SK: responsePointerSk(author, id) } } },
+              { Delete: { TableName: TABLE, Key: responseToKey(author, ctx.sub, id) } },
+            ]),
           ],
         }),
       );

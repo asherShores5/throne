@@ -1,9 +1,11 @@
 // Reactions and Comments (ticket 08). Schema: schema/reaction.graphql; rules: shared/src/reaction.ts.
 // They live on the Log item they answer (attributes `reactions` {author: emoji}, `comments` [..], and the
 // counter `rv`, see resolvers/log.ts), so a Log read brings them along, a Log edit moves them, and deleting
-// the Log deletes them. Two more things per (author, Log), in the Log owner's partition:
-//   PROFILE#<owner> / RESPFROM#<author>#<logId>   {}: the author has something on that Log
-// so ending a Friendship finds everything one side left on the other's Logs with one key range.
+// the Log deletes them. Two pointers per (author, Log), always written and deleted together:
+//   PROFILE#<owner>  / RESPFROM#<author>#<logId>   {}: the author has something on that Log
+//   PROFILE#<author> / RESPTO#<owner>#<logId>      {}: the same, found from the author (Delete Profile, ticket 12)
+// so ending a Friendship finds everything one side left on the other's Logs with one key range, and Delete Profile
+// finds it even after a Friendship ended without its cleanup (forgetResponsesOf).
 //
 // Every change is one transaction: the Log item (conditioned on `rv`, so racing changes never lose one),
 // the pointer, and (for a Friend) a check that the Friendship still exists, so nothing lands after it ends.
@@ -19,7 +21,7 @@ import { emit } from "../events";
 import { UserError, invalid } from "../errors";
 import { TABLE, ddb, profilePk } from "../table";
 import { FRIEND_PREFIX, requireFriend } from "./friend";
-import { RESPONSE_POINTER_PREFIX, out, read, responsePointerSk, sameResponses, type Log } from "./log";
+import { RESPONSE_POINTER_PREFIX, RESPONSE_TO_PREFIX, out, read, responsePointerSk, responseToKey, sameResponses, type Log } from "./log";
 import type { Ctx, ResolverModule } from "./types";
 
 const noLog = () => new UserError("NotFound", "No such Log.");
@@ -47,6 +49,8 @@ function writeItems(owner: string, rec: Record<string, unknown>, next: Required<
   const cond = sameResponses(rec);
   const logId = rec.id as string;
   const pointer = { PK: pk, SK: responsePointerSk(author, logId) };
+  const mirror = responseToKey(author, owner, logId);
+  const keep = hasResponsesFrom(next, author);
   return [
     {
       Update: {
@@ -58,7 +62,8 @@ function writeItems(owner: string, rec: Record<string, unknown>, next: Required<
         ExpressionAttributeValues: { ...cond.values, ":reactions": next.reactions, ":comments": next.comments, ":next": ((rec.rv as number) ?? 0) + 1 },
       },
     },
-    hasResponsesFrom(next, author) ? { Put: { TableName: TABLE, Item: pointer } } : { Delete: { TableName: TABLE, Key: pointer } },
+    keep ? { Put: { TableName: TABLE, Item: pointer } } : { Delete: { TableName: TABLE, Key: pointer } },
+    keep ? { Put: { TableName: TABLE, Item: mirror } } : { Delete: { TableName: TABLE, Key: mirror } },
     ...(friendOf
       ? [{
           ConditionCheck: {
@@ -185,7 +190,12 @@ export async function clearResponses(owner: string, author: string): Promise<voi
       try {
         if (!rec) {
           // The Log is gone; only a stray pointer could be left.
-          await ddb().send(new TransactWriteCommand({ TransactItems: [{ Delete: { TableName: TABLE, Key: { PK: pk, SK: responsePointerSk(author, logId) } } }] }));
+          await ddb().send(new TransactWriteCommand({
+            TransactItems: [
+              { Delete: { TableName: TABLE, Key: { PK: pk, SK: responsePointerSk(author, logId) } } },
+              { Delete: { TableName: TABLE, Key: responseToKey(author, owner, logId) } },
+            ],
+          }));
         } else {
           await ddb().send(new TransactWriteCommand({ TransactItems: writeItems(owner, rec, withoutAuthor(rec, author), author) }));
         }
@@ -195,6 +205,34 @@ export async function clearResponses(owner: string, author: string): Promise<voi
       }
     }
   }
+}
+
+/** Distinct ids after `prefix` (up to the next #) of every item in `sub`'s partition whose SK starts with it. */
+async function idsUnder(sub: string, prefix: string): Promise<string[]> {
+  const out = new Set<string>();
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
+      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
+      ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": prefix },
+      ExclusiveStartKey: start,
+    }));
+    for (const i of r.Items ?? []) out.add(String(i.SK).slice(prefix.length).split("#")[0]);
+    start = r.LastEvaluatedKey;
+  } while (start);
+  return [...out];
+}
+
+/**
+ * Delete Profile (ticket 12): every Reaction and Comment between `me` and anyone, Friend or not, both ways, found
+ * through `me`'s own pointers: RESPTO# (what `me` left on others' Logs) and RESPFROM# (what others left on `me`'s,
+ * whose RESPTO# mirrors in their partitions name `me`). Safe to repeat.
+ */
+export async function forgetResponsesOf(me: string): Promise<void> {
+  for (const owner of await idsUnder(me, RESPONSE_TO_PREFIX)) await clearResponses(owner, me);
+  for (const author of await idsUnder(me, RESPONSE_POINTER_PREFIX)) await clearResponses(me, author);
 }
 
 export const reaction: ResolverModule = {
