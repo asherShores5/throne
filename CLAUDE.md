@@ -44,7 +44,10 @@ code and UI.
   `AWS_REGION=us-west-1 AWS_DEFAULT_REGION=us-west-1 npm run synth` (the dev desktop sets
   AWS_REGION=us-west-2 globally). Needs no AWS credentials; with no hosting config it builds only the app stack.
 - e2e (after `build:web`): `cd e2e && npx tsx smoke.ts`. Screenshots go to `/tmp/e2e-throne-<checkout folder>/`.
-  Look at them; passing DOM checks miss layout bugs. See `e2e/README.md`.
+  Look at them; passing DOM checks miss layout bugs. See `e2e/README.md`. `npx tsx tour.ts` screenshots every
+  screen (phone, desktop, dark) and checks every control has an accessible name (what VoiceOver reads).
+- Deploys and the post-deploy checks (anonymous denial via `infra/scripts/check-live.ts`, plus what only a live
+  deploy or an iPhone can settle): `docs/deploy-runbook.md`.
 
 ## Layout (built so tickets can work in parallel)
 
@@ -64,7 +67,9 @@ code and UI.
   same transaction, and `profileIds()` lists them, so the hourly run needs no Scan; Delete Profile deletes it). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
   Profile (`INVITESLOT#1-3`, claimed in a transaction, so the cap holds under races). An Invite item exists only while
   a place holds it (re-using a place deletes the spent one, revoking deletes it; no `usedBy`), so `forgetInvitesOf` finds all. `preSignUp.ts`: the Cognito
-  pre-sign-up trigger (its own Lambda) that spends an open Invite with one conditional write. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
+  pre-sign-up trigger (its own Lambda): reads the Invite (unknown/spent gets the generic refusal), then asks Cognito
+  whether the username is taken (`cognito.ts` `userExists`, AdminGetUser with the event's pool ID; seam `setUserLookup`),
+  then spends the Invite with one conditional write, so a username clash never burns it (ticket 12). `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
   Profile is one key range, `myLogs(from, to)`; a Friend's the same way via `friendLogs(friend, from, to)` behind `requireFriend`), plus `LOGID#<id>` (id lookup + idempotent create) and
   `LOGDAY#<Day>` (count for the 50-a-Day cap), always written together in one transaction. `clock.ts`: server
   time for the time rules (seam for e2e). `resolvers/friend.ts`: Friend codes (`FRIENDCODE#<code>` lookup plus
@@ -79,8 +84,12 @@ code and UI.
   `out(rec, viewer)` in `log.ts` filters them (owner: all; anyone else: only their own; shared
   `visibleResponses`). Plus `RESPFROM#<author>#<logId>` in the owner's partition, so `endFriendship` can
   `clearResponses` both ways (it runs even when the Friendship is already over, so a retry finishes a half-done
-  cleanup). Each change is one transaction: Log Update conditioned on `rv`, the pointer, and a ConditionCheck on
-  the author's `FRIEND#<owner>` item.
+  cleanup), and its mirror `RESPTO#<owner>#<logId>` in the author's partition (ticket 12), always written/deleted
+  with it (also by `deleteLog`), so Delete Profile's `forgetResponsesOf` finds Reactions/Comments with ex-Friends
+  both ways. Each change is one transaction: Log Update conditioned on `rv`, both pointers, and a ConditionCheck on
+  the author's `FRIEND#<owner>` item. Comments are capped at 20 per author per Log (per author, so the cap never
+  hints at others' Comments). Display names and Comments refuse control and invisible format characters
+  (shared `text.ts`); waiting sent Friend requests are capped at 5 (`MAX_PENDING_SENT`).
   `resolvers/push.ts` (ticket 09): `pushPrefs` toggles on the Profile record (absent = Summary on, rest off),
   "Friend logged" as `notifyLogs` on my `FRIEND#<other>` item (so ending a Friendship unfollows), devices at
   `PUSH#<deviceId>`. `events.ts`: `emit(PushEvent)` after a write commits = async Lambda invoke of the Notifier
@@ -104,12 +113,16 @@ code and UI.
 - `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table; it also
   captures push events, `h.deliver()` runs the real Notifier on them with a fake push service, `h.takePushes()`) and
   `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
-  refuses un-aliased attribute names and unused placeholders).
+  refuses un-aliased attribute names and unused placeholders). It also stands in for IAM: the harness (and
+  `e2e/backend.ts`) runs each Lambda inside `asLambda(name, ...)`, and any DynamoDB action (each one inside a
+  transaction too) not listed for that Lambda in `api/src/dynamoAccess.ts` fails with AccessDeniedException.
 - `infra/lib/`: `stacks.ts` (AppStack: table, Cognito, AppSync + Lambda, budget), `hosting.ts` (CertStack,
   WebStack: S3 + CloudFront with the CSP from `csp.ts`), `ci.ts` (CiStack: the GitHub OIDC deploy role),
   `config.ts` (zone/account from context or env), `app.ts` (wires them; Cert/Web/Ci only with hosting
   config). An AppSync resolver is created for every Query/Mutation field in the composed schema, so a new
-  field needs only its schema line and its resolver. The Lambda gets Get/Put/Update/Delete/Query/ConditionCheckItem on the
+  field needs only its schema line and its resolver. Table actions per Lambda come from `api/src/dynamoAccess.ts`
+  (`grantTable`); `infra/test/iam.test.ts` asserts the grants equal that list and that each listed action really
+  appears in that Lambda's esbuild bundle (nothing unused granted). The API Lambda gets Get/Put/Update/Delete/Query/ConditionCheckItem on the
   table, `lambda:InvokeFunction` on the Notifier and `cognito-idp:AdminDeleteUser` on this pool only (env `USER_POOL_ID`;
   no cycle, the pool's trigger is the separate pre-sign-up Lambda), no SSM (asserted in `infra/test/stacks.test.ts`). The
   Notifier gets Get/Query/Delete/Put/ConditionCheckItem on the table (Put + ConditionCheck only for the Summary claim) and `ssm:GetParameter`
@@ -144,16 +157,21 @@ code and UI.
 - **`QUERY_DEPTH_LIMIT` is the deepest real selection** (`me > avatar > emoji` and
   `myLogs > reactions > author` = 3 now; the Log selection lives in `web/src/api/selections.ts` so the test can
   import it). A ticket that sends a deeper one raises it and updates the pinned test in
-  `infra/test/stacks.test.ts`; e2e refuses deeper queries.
+  `infra/test/stacks.test.ts`; e2e refuses deeper queries. `infra/test/webQueries.test.ts` reads every GraphQL
+  operation in `web/src` (selections must be plain string constants), validates each against the schema, checks
+  the deepest equals the cap, and that every root field is used by the app.
 - **Never write a Log item without the `rv` condition** (`sameResponses`/`unchangedSince` in `resolvers/log.ts`):
   a blind Put or Delete would wipe a Reaction or Comment that landed after the read (or leave its pointer).
 - **The handler reads env at import time**: tests and e2e import it through `api/src/testing/harness.ts` /
   `e2e/backend.ts`, which set the env first. Never import it statically in a test.
 - **Self sign-up is on only because of the Invite pre-sign-up trigger** (`api/src/preSignUp.ts`); never remove
   or weaken the trigger while self sign-up is on (one test in `infra/test/stacks.test.ts` asserts both). The
-  trigger gets only `TABLE_NAME` and `UpdateItem` (a pool ID in its env would be a circular dependency).
+  trigger gets only `TABLE_NAME`, GetItem + UpdateItem on the table, and AdminGetUser on this pool in a separate
+  `PreSignUpUserLookup` policy (a pool ID in its env, or the grant in its default policy, would be a circular dependency).
   Visitors can't call the API, so the Invite landing page only learns a link is spent when sign-up is refused.
-  It checks the form before calling SignUp, because a refused SignUp may still have spent the Invite.
+  It checks the form before calling SignUp; the trigger's "username taken" and "try again" answers leave the Invite
+  open (`web/src/auth.ts` keeps the form for those). Whether Cognito checks a taken username before or after the
+  trigger is undocumented; `docs/deploy-runbook.md` step 9 checks it live.
 - **Log writes go through `web/src/sync/logs.ts`** (`logNow`/`editLog`/`removeLog`/`useLogs`), never straight
   to `api/log.ts`, or they won't work offline or show as pending. The server's answer to a queued write comes
   later, so rules a form can check (Details, time) are checked before queueing (`views/log/form.ts`); only
@@ -169,10 +187,15 @@ code and UI.
   from the event kind + a Display name only. Emit an event only after the write commits and only when
   something changed (a retry or no-op emits nothing). The API Lambda must never get SSM access.
 - **Delete Profile must keep finding everything**: an item that holds a Profile's data or names them outside their own
-  partition needs a pointer in their partition (like `RESPFROM#`, `INSUMMARY#`, `INVITESLOT#`) and a step in
+  partition needs a pointer in their partition (like `RESPTO#`/`RESPFROM#`, `INSUMMARY#`, `INVITESLOT#`) and a step in
   `resolvers/deleteProfile.ts`; add it to the seed in `api/src/deleteProfile.test.ts`, which fails on any leftover
   naming them. Never store a username on someone else's item. New per-Profile localStorage keys go in
   `web/src/storageKeys.ts` and `forgetProfileHere`.
-- **A transaction's ConditionCheck needs `dynamodb:ConditionCheckItem`** in IAM (the fake doesn't check IAM).
+- **A new DynamoDB action goes in `api/src/dynamoAccess.ts`** for the Lambda that uses it (a transaction's
+  ConditionCheck needs `ConditionCheckItem`); the fake refuses it until then, and infra grants exactly the list.
+- **Reads that gate access are strongly consistent** (`ConsistentRead: true` in friend.ts `get()` and handler.ts
+  `refuseDeleted`): an eventually consistent read could let an ex-Friend read Logs just after the Friendship ended.
+- **Sign out forgets this Profile's copy** of Logs and Profile on the device (`forgetOnSignOut`); only unsent
+  outbox writes stay.
 - **Passkeys**: the relying party is `APP_DOMAIN` (`throne.ashershores.com`), so passkeys only work there,
   and changing it orphans every passkey.

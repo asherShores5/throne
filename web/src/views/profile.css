@@ -22,7 +22,7 @@ button.danger-fill { background: var(--danger); border-color: var(--danger); col
 .join { padding-top: 6vh; }
 .join .hint { text-align: left; }
 
-.avatar-link { display: inline-grid; border-radius: 50%; }
+.avatar-link { display: inline-grid; border-radius: 50%; text-decoration: none; }
 .avatar-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .avatar.big { width: 3.5rem; height: 3.5rem; font-size: 2rem; justify-self: center; }
 .avatar-picker { display: grid; gap: 0.6rem; }
