@@ -72,6 +72,13 @@ code and UI.
   **Every read of another Profile's data goes through `isFriend(caller, other)` or
   `requireFriend(ctx, other, notFound)`** (one GetItem in the caller's partition; a non-Friend gets the same
   error as "not found"); also `friendIds(sub)` and `profileCard(sub)` (Display name + Avatar).
+  `resolvers/reaction.ts`: Reactions and Comments live ON the Log item (`reactions` {author: emoji},
+  `comments` [...], counter `rv`), so Log reads bring them, edits move them and deleting the Log deletes them;
+  `out(rec, viewer)` in `log.ts` filters them (owner: all; anyone else: only their own; shared
+  `visibleResponses`). Plus `RESPFROM#<author>#<logId>` in the owner's partition, so `endFriendship` can
+  `clearResponses` both ways (it runs even when the Friendship is already over, so a retry finishes a half-done
+  cleanup). Each change is one transaction: Log Update conditioned on `rv`, the pointer, and a ConditionCheck on
+  the author's `FRIEND#<owner>` item.
 - `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table) and
   `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
   refuses un-aliased attribute names and unused placeholders).
@@ -84,12 +91,12 @@ code and UI.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
   `route.ts` (paths `/`, `/calendar`, `/friends`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
-  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `Calendar` (the Avatar row: Me, each Friend, Everyone; shown once there's a Friend), `MonthCalendar` (one person's heat month, or the combined grid with a count per person in Avatar colors from shared `combinedColors`), `monthLogs.ts` (`useMonthLogs`: my Logs from the outbox store via `refreshLogs`/`useLogs`, so pending ones show; a Friend's via `friendLogs`, never cached; one range query per person), `MonthGrid` (cell content from a `day()` callback), `DaySheet` (one group per person; only my Logs editable), `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `Calendar` (the Avatar row: Me, each Friend, Everyone; shown once there's a Friend), `MonthCalendar` (one person's heat month, or the combined grid with a count per person in Avatar colors from shared `combinedColors`), `monthLogs.ts` (`useMonthLogs`: my Logs from the outbox store via `refreshLogs`/`useLogs`, so pending ones show; a Friend's via `friendLogs`, never cached; one range query per person), `MonthGrid` (cell content from a `day()` callback), `DaySheet` (one group per person; only my Logs editable; Reactions/Comments under each Log via `log/Responses.tsx`, online only, and a Day marker when there are some), `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -98,8 +105,12 @@ code and UI.
   Partitions are `PROFILE#<sub>`; the Profile record is `PROFILE#<sub>` / `PROFILE`.
 - **Alias every attribute name** in every DynamoDB expression (`#status`, `#pk`, ...). The fake throws on a
   bare name or an unused `#name`/`:value`; live DynamoDB would throw on reserved words.
-- **`QUERY_DEPTH_LIMIT` is the deepest real selection** (`me > avatar > emoji` = 3 now). A ticket that sends
-  a deeper one raises it and updates the pinned test in `infra/test/stacks.test.ts`; e2e refuses deeper queries.
+- **`QUERY_DEPTH_LIMIT` is the deepest real selection** (`me > avatar > emoji` and
+  `myLogs > reactions > author` = 3 now; the Log selection lives in `web/src/api/selections.ts` so the test can
+  import it). A ticket that sends a deeper one raises it and updates the pinned test in
+  `infra/test/stacks.test.ts`; e2e refuses deeper queries.
+- **Never write a Log item without the `rv` condition** (`sameResponses`/`unchangedSince` in `resolvers/log.ts`):
+  a blind Put or Delete would wipe a Reaction or Comment that landed after the read (or leave its pointer).
 - **The handler reads env at import time**: tests and e2e import it through `api/src/testing/harness.ts` /
   `e2e/backend.ts`, which set the env first. Never import it statically in a test.
 - **Self sign-up is on only because of the Invite pre-sign-up trigger** (`api/src/preSignUp.ts`); never remove
