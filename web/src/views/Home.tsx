@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import { signOut } from "../auth";
-import { myLogs } from "../api/log";
 import type { Profile } from "../api/profile";
 import { onLink } from "../route";
 import { loadMeCached } from "../sync/profileCache";
 import "./profile.css";
-import { PersonCalendar } from "./calendar/PersonCalendar";
+import { Calendar } from "./calendar/Calendar";
 import { FriendsPanel } from "./friends/FriendsPanel";
 import { LogPanel } from "./log/LogPanel";
 
@@ -13,7 +12,7 @@ export type HomeView = "log" | "calendar" | "friends";
 
 /**
  * The signed-in home screen, three tabs: Log ("/": the Log button and recent Logs, views/log/),
- * Calendar ("/calendar": my month, views/calendar/) and Friends ("/friends": views/friends/). Loading it
+ * Calendar ("/calendar": my month, a Friend's, or everyone's, views/calendar/) and Friends ("/friends": views/friends/). Loading it
  * also creates the Profile on a first sign-in (api/profile.ts); offline it opens with the last copy
  * (sync/profileCache.ts).
  */
@@ -52,7 +51,7 @@ export function Home({ view = "log" }: { view?: HomeView }) {
       ) : view === "friends" ? (
         <FriendsPanel />
       ) : view === "calendar" ? (
-        <PersonCalendar loadLogs={myLogs} viewerZone={me.homeZone} editable />
+        <Calendar me={me} />
       ) : (
         <section aria-label="Home" className="empty-home">
           <p>Hi, {me.displayName}.</p>

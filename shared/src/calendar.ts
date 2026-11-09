@@ -86,3 +86,53 @@ export function monthGrid(month: string): (string | null)[][] {
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return weeks;
 }
+
+// ---- Combined grid colors ------------------------------------------------------------
+
+/** How the combined grid draws one visible Profile's count. */
+export interface CombinedColor {
+  /** Background of the count: the Avatar color, or an alternate shade of it when it clashes. */
+  color: string;
+  /** Text on it (black or white, whichever reads better). */
+  text: string;
+  /** Set when the color clashed: the Avatar emoji goes next to the count so the two can be told apart. */
+  emoji?: string;
+}
+
+/** Alternate shades for the 2nd, 3rd and 4th Profile of one color: toward black, white, then black again. */
+const CLASH_SHADES: readonly [toward: number, amount: number][] = [[0, 0.4], [255, 0.45], [0, 0.65]];
+
+const hex2 = (n: number) => Math.round(n).toString(16).padStart(2, "0");
+const rgbOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+function mix(hex: string, toward: number, amount: number): string {
+  return `#${rgbOf(hex).map((c) => hex2(c + (toward - c) * amount)).join("")}`;
+}
+
+/** Black or white text on `hex`, whichever has the higher WCAG contrast. */
+function textOn(hex: string): string {
+  const [r, g, b] = rgbOf(hex).map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return (l + 0.05) / 0.05 >= 1.05 / (l + 0.05) ? "#000000" : "#ffffff";
+}
+
+/**
+ * Colors for the combined grid, in display order (me first, then Friends in Friends-list order). The
+ * first Profile with a color keeps it; each later one with the same color gets an alternate shade plus
+ * its emoji (spec: Calendar UI).
+ */
+export function combinedColors(avatars: readonly { color: string; emoji: string }[]): CombinedColor[] {
+  const seen = new Map<string, number>();
+  return avatars.map(({ color, emoji }) => {
+    const key = color.toLowerCase();
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    if (n === 0) return { color: key, text: textOn(key) };
+    const [toward, amount] = CLASH_SHADES[(n - 1) % CLASH_SHADES.length];
+    const shade = mix(key, toward, amount);
+    return { color: shade, text: textOn(shade), emoji };
+  });
+}

@@ -49,4 +49,13 @@ export async function myLogs(from: string, to: string): Promise<Log[]> {
   return r.myLogs.map(clean);
 }
 
+/** A Friend's Logs on the Days from..to (their own Days). NotFound once they aren't a Friend. Never cached or queued. */
+export async function friendLogs(friend: string, from: string, to: string): Promise<Log[]> {
+  const r = await gql<{ friendLogs: Log[] }>(
+    `query Theirs($friend: ID!, $from: String!, $to: String!) { friendLogs(friend: $friend, from: $from, to: $to) { ${LOG} } }`,
+    { friend, from, to },
+  );
+  return r.friendLogs.map(clean);
+}
+
 export { errorText } from "./errors";

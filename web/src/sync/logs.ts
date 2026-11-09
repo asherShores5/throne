@@ -157,7 +157,7 @@ export function useLogs(): LogsView {
  */
 export async function refreshLogs(from: string, to: string): Promise<void> {
   start();
-  shownDays = { from, to };
+  const want = (shownDays = { from, to });
   const u = user;
   await flush();
   try {
@@ -165,7 +165,8 @@ export async function refreshLogs(from: string, to: string): Promise<void> {
     for (let tries = 0; tries < 3; tries++) {
       const seen = confirmed;
       const logs = await myLogs(from, to);
-      if (u !== user) return;
+      // Signed out, or the screen moved on (e.g. another month) while this was on its way.
+      if (u !== user || want !== shownDays) return;
       if (seen !== confirmed) continue;
       setServer(logs);
       emit();

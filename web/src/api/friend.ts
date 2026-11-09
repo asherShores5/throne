@@ -45,6 +45,11 @@ export async function loadFriends(): Promise<FriendsState> {
   return { code: r.myFriendCode, friends: r.friends, requests: r.friendRequests, sent: r.sentFriendRequests };
 }
 
+/** Just the Friends, oldest Friendship first (the Calendar's Avatar row). */
+export async function listFriends(): Promise<Friend[]> {
+  return (await gql<{ friends: Friend[] }>(`query FriendList { friends { ${FRIEND} } }`)).friends;
+}
+
 export async function regenerateFriendCode(): Promise<string> {
   return (await gql<{ regenerateFriendCode: string }>(`mutation Regenerate { regenerateFriendCode }`)).regenerateFriendCode;
 }
