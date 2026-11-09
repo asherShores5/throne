@@ -5,3 +5,4 @@ export * from "./log";
 export * from "./calendar";
 export * from "./signUp";
 export * from "./friend";
+export * from "./reaction";

@@ -24,13 +24,17 @@ export function applyPending(server: readonly Log[], ops: readonly Op[]): ShownL
       byId.delete(op.id);
     } else if (op.type === "create") {
       const { id, instant } = op.log;
-      byId.set(id, { id, instant, logZone: op.zone, day: dayOf(Date.parse(instant), op.zone), ...detailsOf(op.log), pending: true });
+      byId.set(id, { id, instant, logZone: op.zone, day: dayOf(Date.parse(instant), op.zone), ...detailsOf(op.log), reactions: [], comments: [], pending: true });
     } else {
       const old = byId.get(op.log.id);
       if (!old) continue;
       const instant = op.log.instant ?? old.instant;
       // The Day comes from the Log's own zone, never the current Home zone.
-      byId.set(old.id, { id: old.id, instant, logZone: old.logZone, day: dayOf(Date.parse(instant), old.logZone), ...detailsOf(op.log), pending: true });
+      // Reactions and Comments stay: an edit only changes the time and Details.
+      byId.set(old.id, {
+        id: old.id, instant, logZone: old.logZone, day: dayOf(Date.parse(instant), old.logZone), ...detailsOf(op.log),
+        reactions: old.reactions ?? [], comments: old.comments ?? [], pending: true,
+      });
     }
   }
   return [...byId.values()];

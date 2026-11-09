@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Log } from "../../api/log";
 import { editFor, formFor } from "./form";
 
-const LOG: Log = { id: "00000000-0000-4000-8000-000000000001", instant: "2026-11-08T07:30:12.345Z", logZone: "America/Los_Angeles", day: "2026-11-07", flags: ["pain"], bristolType: 4 };
+const LOG: Log = { id: "00000000-0000-4000-8000-000000000001", instant: "2026-11-08T07:30:12.345Z", logZone: "America/Los_Angeles", day: "2026-11-07", flags: ["pain"], bristolType: 4, reactions: [], comments: [] };
 
 /** "Now" for the time rules: 10:00 on 8 Nov in Los Angeles. */
 const NOW = Date.parse("2026-11-08T18:00:00Z");

@@ -1,20 +1,28 @@
 // The home screen's Log area: one big button that saves a Log for right now, a toast with Undo and
-// "Add details" for a few seconds, and the last 7 days of Logs (the edit window) to edit or delete.
+// "Add details" for a few seconds, and the last 7 days of Logs (the edit window) to edit or delete, with
+// the Reactions and Comments Friends left on them (a Comment can be deleted here).
 // Every write goes through the outbox (sync/logs.ts): it shows at once, works with no signal, and is
 // marked "Waiting to sync" until the server has it.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { addDays, dayOf, localTime } from "@throne/shared";
 import { errorText, type Log } from "../../api/log";
-import { dismissNotice, logNow as saveNow, refreshLogs, removeLog, useLogs } from "../../sync/logs";
+import { listFriends } from "../../api/friend";
+import { dismissNotice, gotLog, logNow as saveNow, refreshLogs, removeLog, useLogs } from "../../sync/logs";
 import { LogEditor } from "./LogEditor";
 import { LogList } from "./LogList";
+import { Responses, type Directory } from "./Responses";
 import "./log.css";
 
 /** How long Undo stays on screen. */
 export const UNDO_MS = 6000;
 
-export function LogPanel({ homeZone }: { homeZone: string }) {
+export function LogPanel({ homeZone, meId }: { homeZone: string; meId: string }) {
   const { logs, notices, offline, waiting } = useLogs();
+  // Names for the Reactions and Comments Friends left on my Logs. Offline keeps whatever loaded.
+  const [people, setPeople] = useState<Directory>(new Map());
+  useEffect(() => {
+    listFriends().then((fs) => setPeople(new Map(fs.map((f) => [f.id, { name: f.displayName, avatar: f.avatar }]))), () => {});
+  }, []);
   const [toast, setToast] = useState<{ log?: Log; text: string }>();
   const [editing, setEditing] = useState<Log>();
   const [error, setError] = useState<string>();
@@ -78,7 +86,10 @@ export function LogPanel({ homeZone }: { homeZone: string }) {
 
       <section aria-label="Recent Logs" className="recent">
         {logs.length ? (
-          <LogList logs={logs} today={today} onEdit={setEditing} onDelete={(l) => remove(l)} />
+          <LogList
+            logs={logs} today={today} onEdit={setEditing} onDelete={(l) => remove(l)}
+            below={(l) => <Responses log={l} owner={meId} viewer={meId} people={people} onChanged={gotLog} />}
+          />
         ) : (
           <p className="hint">No Logs in the last 7 days.</p>
         )}

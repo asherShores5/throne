@@ -12,6 +12,8 @@ export interface DayCell {
   /** Heat level 0-4 (heatLevel in shared); left out for cells that shade themselves. */
   heat?: number;
   content: ReactNode;
+  /** The Day has Reactions or Comments the viewer can see: a small dot in the corner. */
+  marker?: boolean;
 }
 
 export function MonthGrid({ month, today, day, onPick }: {
@@ -36,8 +38,9 @@ export function MonthGrid({ month, today, day, onPick }: {
                 role="gridcell" key={d} className="day" data-day={d} data-heat={c.heat}
                 aria-current={d === today ? "date" : undefined}
               >
-                <button type="button" aria-label={c.label} onClick={() => onPick(d)}>
+                <button type="button" aria-label={c.marker ? `${c.label}, with Reactions or Comments` : c.label} onClick={() => onPick(d)}>
                   <span className="date" aria-hidden="true">{Number(d.slice(8))}</span>
+                  {c.marker && <span className="marker" data-marker aria-hidden="true" />}
                   {c.content}
                 </button>
               </div>

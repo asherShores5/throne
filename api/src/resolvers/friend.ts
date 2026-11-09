@@ -19,6 +19,7 @@ import {
   FRIEND_REQUESTS_PER_WINDOW, MAX_FRIENDS, formatFriendCode, friendCodeFrom, parseFriendCode, sendsInWindow, type Avatar,
 } from "@throne/shared";
 import { now } from "../clock";
+import { clearResponses } from "./reaction";
 import { UserError, invalid } from "../errors";
 import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "../table";
 import type { Ctx, ResolverModule } from "./types";
@@ -326,11 +327,13 @@ async function endFriendship(me: string, other: string): Promise<true> {
   } catch (e) {
     const failed = failedConditions(e);
     if (!failed) throw e;
-    if (failed[0]) return true; // already over (a retry, or the other side ended it first)
-    throw e;
+    // failed[0]: already over (a retry, or the other side ended it first). Still run the cleanup below:
+    // a retry may be finishing one that stopped half way.
+    if (!failed[0]) throw e;
   }
-  // Ticket 08: also delete every Reaction and Comment either left on the other's Logs (batched,
-  // idempotent if retried), per the spec.
+  // Every Reaction and Comment either left on the other's Logs. Nothing new can land now (each write checks
+  // the Friendship in its transaction), and each step is safe to repeat. Ticket 11's Profile delete reuses it.
+  await Promise.all([clearResponses(me, other), clearResponses(other, me)]);
   return true;
 }
 

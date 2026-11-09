@@ -40,9 +40,11 @@ export function AvatarDot({ avatar, label }: { avatar: Avatar; label?: string })
   );
 }
 
-export function MonthCalendar({ people, combined, viewerZone }: {
+export function MonthCalendar({ people, directory, combined, viewerZone }: {
   /** One person, or everyone (me first, then Friends in Friends-list order) when `combined`. */
   people: readonly Person[];
+  /** Me and every Friend: names for Reactions and Comments, whoever's Calendar this is. */
+  directory: readonly Person[];
   combined: boolean;
   /** The viewer's Home zone: decides "today" and which month opens first. */
   viewerZone: string;
@@ -51,7 +53,11 @@ export function MonthCalendar({ people, combined, viewerZone }: {
   const thisMonth = monthOf(today);
   const [month, setMonth] = useState(thisMonth);
   const [open, setOpen] = useState<string>();
-  const { logs, loading, error, reload } = useMonthLogs(month, people);
+  const { logs, loading, error, reload, replace } = useMonthLogs(month, people);
+  const viewer = (directory.find((p) => p.me) ?? people[0]).id;
+  const names = new Map(directory.map((p) => [p.id, { name: p.name, avatar: p.avatar }]));
+  // Days with Reactions or Comments the viewer can see (the server sends only those).
+  const marked = new Set(people.flatMap((p) => (logs[p.id] ?? []).filter((l) => l.reactions.length || l.comments.length).map((l) => l.day)));
   useRefreshOnFocus(reload);
   const { pull, handlers } = usePullToRefresh(reload);
 
@@ -62,11 +68,12 @@ export function MonthCalendar({ people, combined, viewerZone }: {
   const dayCell = (d: string) => {
     if (!combined) {
       const n = counts[one.id][d] ?? 0;
-      return { label: `${shortDay(d)}: ${plural(n, "Log")}`, heat: heatLevel(n), content: <span className="count">{n || ""}</span> };
+      return { label: `${shortDay(d)}: ${plural(n, "Log")}`, heat: heatLevel(n), marker: marked.has(d), content: <span className="count">{n || ""}</span> };
     }
     const ns = people.map((p) => counts[p.id][d] ?? 0);
     return {
       label: `${shortDay(d)}: ${people.map((p, i) => `${p.name} ${ns[i]}`).join(", ")}`,
+      marker: marked.has(d),
       content: (
         <span className={`counts n${people.length}`} aria-hidden="true">
           {people.map((p, i) => (
@@ -124,8 +131,9 @@ export function MonthCalendar({ people, combined, viewerZone }: {
       {open && (
         <DaySheet
           day={open} today={today} subtitle={theirs} onClose={() => setOpen(undefined)}
+          viewer={viewer} people={names}
           groups={people.map((p) => ({
-            id: p.id, label: combined ? (p.me ? "My Logs" : `${p.name}'s Logs`) : undefined, editable: !!p.me,
+            id: p.id, onChanged: (l) => replace(p, l), label: combined ? (p.me ? "My Logs" : `${p.name}'s Logs`) : undefined, editable: !!p.me,
             title: combined ? <><AvatarDot avatar={p.avatar} /> {p.name}</> : undefined,
             logs: (logs[p.id] ?? []).filter((l) => l.day === open),
           }))}

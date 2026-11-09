@@ -94,7 +94,10 @@ await c.check("one range query for the month: first to last Day", async () => {
   await p.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Calendar" }).click();
   await expect(cell(p, "2026-11-06").locator(".count")).toHaveText("5");
   // Every Calendar load is the whole month at once (a focus refresh may repeat it, never split it).
-  const month = calls.slice(before).filter((x) => x.field === "myLogs");
+  // A focus resume (sync/logs.ts) that fires before the Calendar asks may repeat the Log tab's own range
+  // (Nov 1-9 here); that one isn't the Calendar's.
+  const LOG_TAB = JSON.stringify({ from: "2026-11-01", to: "2026-11-09" });
+  const month = calls.slice(before).filter((x) => x.field === "myLogs" && JSON.stringify(x.args) !== LOG_TAB);
   expect(month.length).toBeGreaterThan(0);
   expect([...new Set(month.map((x) => JSON.stringify(x.args)))]).toEqual([JSON.stringify({ from: "2026-11-01", to: "2026-11-30" })]);
   await p.context().close();

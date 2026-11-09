@@ -1,7 +1,7 @@
 // The Day sheet: one Day's Logs in time order with time (in each Log's zone) and Details, one group per
 // person shown (just one on a single Calendar; everyone with Logs that Day on the combined grid). My own
 // Logs can be deleted, and edited while inside the 7-day window (the server's rule); a Friend's are
-// read-only. My writes go through the outbox (sync/logs.ts), so the grid behind updates by itself.
+// read-only, but I can react and comment on them (log/Responses.tsx). My Log writes go through the outbox (sync/logs.ts), so the grid behind updates by itself.
 import { useEffect, useState, type ReactNode } from "react";
 import { checkLogTime } from "@throne/shared";
 import type { Log } from "../../api/log";
@@ -9,6 +9,7 @@ import { removeLog } from "../../sync/logs";
 import type { ShownLog } from "../../sync/pending";
 import { LogEditor } from "../log/LogEditor";
 import { LogList } from "../log/LogList";
+import { Responses, type Directory } from "../log/Responses";
 import "../log/log.css";
 
 /** e.g. "Sunday, November 8" (the Day as written, not shifted by any zone). */
@@ -24,12 +25,18 @@ export interface DayGroup {
   logs: ShownLog[];
   /** The viewer owns these Logs. */
   editable: boolean;
+  /** The server's newer copy of one of these Logs (a Reaction or Comment changed). */
+  onChanged: (l: Log) => void;
 }
 
-export function DaySheet({ day, today, groups, subtitle, onClose }: {
+export function DaySheet({ day, today, groups, subtitle, viewer, people, onClose }: {
   day: string;
   today: string;
   groups: DayGroup[];
+  /** The signed-in Profile's id. */
+  viewer: string;
+  /** Names for Reaction and Comment authors. */
+  people: Directory;
   /** Under the title, e.g. "Sam's Logs" on a Friend's Calendar. */
   subtitle?: string;
   onClose: () => void;
@@ -64,6 +71,7 @@ export function DaySheet({ day, today, groups, subtitle, onClose }: {
                 logs={g.logs} today={today} oldestFirst onEdit={setEditing} onDelete={remove}
                 canEdit={(l) => g.editable && checkLogTime(Date.parse(l.instant), Date.now()) === undefined}
                 canDelete={() => g.editable}
+                below={(l) => <Responses log={l} owner={g.id} viewer={viewer} people={people} onChanged={g.onChanged} />}
               />
             </section>
           ))

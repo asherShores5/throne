@@ -47,7 +47,7 @@ export function Calendar({ me }: { me: Profile }) {
           ))}
         </div>
       )}
-      <MonthCalendar people={people} combined={current === EVERYONE} viewerZone={me.homeZone} />
+      <MonthCalendar people={people} directory={everyone} combined={current === EVERYONE} viewerZone={me.homeZone} />
     </>
   );
 }

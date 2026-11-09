@@ -1,6 +1,9 @@
 // Logs (schema/log.graphql). The client makes each Log's id, so a retried create is the same Log.
-import type { Details } from "@throne/shared";
+import type { Comment, Details, Reaction } from "@throne/shared";
 import { gql } from "./gql";
+import { LOG } from "./selections";
+
+export { LOG };
 
 export interface Log extends Details {
   id: string;
@@ -9,10 +12,11 @@ export interface Log extends Details {
   logZone: string;
   /** YYYY-MM-DD in logZone. */
   day: string;
+  /** Only the ones the viewer may see (the owner: all; a Friend: their own). */
+  reactions: Reaction[];
+  comments: Comment[];
 }
 
-/** Depth 2 (myLogs > id): well under QUERY_DEPTH_LIMIT. */
-const LOG = `id instant logZone day duration bristolType note flags`;
 
 /** What a create or edit sends: the time (optional) and every Detail (left out = none). */
 export interface LogInput extends Partial<Details> {
@@ -21,8 +25,11 @@ export interface LogInput extends Partial<Details> {
 }
 
 /** GraphQL drops nulls into the Log as `null`; the shared type uses "absent". */
-function clean(l: Log): Log {
+export function clean(l: Log): Log {
   const out = { ...l } as Record<string, unknown>;
+  // A Log saved on the device before Reactions existed has none.
+  out.reactions ??= [];
+  out.comments ??= [];
   for (const k of ["duration", "bristolType", "note"]) if (out[k] == null) delete out[k];
   return out as unknown as Log;
 }
