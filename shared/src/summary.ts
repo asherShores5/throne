@@ -91,6 +91,11 @@ export const REGULAR_MIN_DAYS = 5;
 export const TIME_AWARD_MIN_DAYS = 3;
 /** The shortest run of Days that counts as a Streak. */
 export const STREAK_MIN_DAYS = 3;
+/**
+ * Early bird and Night owl only: a Log before this local hour belongs to the night before (00:30 is a late
+ * night, not an early morning). Calendar Days still split at midnight; only these two Awards use it.
+ */
+export const NIGHT_ENDS_HOUR = 4;
 /** An Award needs at least this many people with enough data. */
 export const AWARD_MIN_PEOPLE = 2;
 
@@ -104,6 +109,15 @@ const minutesOf = (l: WeekLog) => {
   const [h, m] = localTime(typeof l.instant === "number" ? l.instant : Date.parse(l.instant), l.logZone).split(":").map(Number);
   return h * 60 + m;
 };
+
+/**
+ * For Early bird / Night owl: the night a Log belongs to and its minutes into that night's Day. Before
+ * NIGHT_ENDS_HOUR it counts as the Day before, past midnight (00:30 = minute 1470 of the Day before).
+ */
+function nightOf(l: WeekLog): { night: string; minutes: number } {
+  const m = minutesOf(l);
+  return m < NIGHT_ENDS_HOUR * 60 ? { night: addDays(l.day, -1), minutes: m + 24 * 60 } : { night: l.day, minutes: m };
+}
 
 /** Twice the median (keeps an even count's midpoint a whole number, so ties compare exactly). */
 function median2(values: number[]): number {
@@ -130,20 +144,25 @@ function pick(scored: Scored[], better: (a: number, b: number) => boolean): stri
 export function weekAwards(people: readonly { id: string; logs: readonly WeekLog[] }[], week: SummaryWeek): AwardResult[] {
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(week.weekStart, i));
   const stats = people.map(({ id, logs }) => {
-    const byDay = new Map<string, number[]>();
-    for (const l of logs) if (inWeek(l.day, week)) byDay.set(l.day, [...(byDay.get(l.day) ?? []), minutesOf(l)]);
-    const counts = weekDays.map((d) => byDay.get(d)?.length ?? 0);
-    const daysLogged = byDay.size;
+    const these = logs.filter((l) => inWeek(l.day, week));
+    const counts = weekDays.map((d) => these.filter((l) => l.day === d).length);
+    const daysLogged = counts.filter(Boolean).length;
+    // Early bird / Night owl group the week's Logs by night instead (see nightOf).
+    const byNight = new Map<string, number[]>();
+    for (const l of these) {
+      const { night, minutes } = nightOf(l);
+      byNight.set(night, [...(byNight.get(night) ?? []), minutes]);
+    }
     let run = 0, longest = 0;
     for (const c of counts) longest = Math.max(longest, (run = c ? run + 1 : 0));
     const sum = counts.reduce((a, b) => a + b, 0);
-    const timed = daysLogged >= TIME_AWARD_MIN_DAYS;
+    const timed = byNight.size >= TIME_AWARD_MIN_DAYS;
     return {
       id,
       // 7 * (sum of squares) - sum^2 = 49 * variance of the daily counts: a whole number.
       regular: daysLogged >= REGULAR_MIN_DAYS ? 7 * counts.reduce((a, c) => a + c * c, 0) - sum * sum : undefined,
-      early: timed ? median2([...byDay.values()].map((m) => Math.min(...m))) : undefined,
-      late: timed ? median2([...byDay.values()].map((m) => Math.max(...m))) : undefined,
+      early: timed ? median2([...byNight.values()].map((m) => Math.min(...m))) : undefined,
+      late: timed ? median2([...byNight.values()].map((m) => Math.max(...m))) : undefined,
       streak: longest >= STREAK_MIN_DAYS ? longest : undefined,
     };
   });

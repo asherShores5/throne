@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   AWARD_NAMES, dueSummaryWeek, personWeek, summaryWeekOf, weekAwards, type SummaryWeek, type WeekLog,
 } from "./summary";
+import { addDays } from "./log";
 
 const WEEK: SummaryWeek = { weekStart: "2026-11-02", weekEnd: "2026-11-08" };
 const UTC = "UTC";
@@ -156,6 +157,55 @@ describe("Awards: each needs 2+ people with enough data; ties share", () => {
       const r = weekAwards([a, two], WEEK);
       expect(award(r, "earlyBird")).toBeUndefined();
       expect(award(r, "nightOwl")).toBeUndefined();
+    });
+
+    describe("before 04:00 local counts as the night before (only for these two Awards)", () => {
+      const evening = (id: string, t: string) => times(id, [MON, t], [TUE, t], [WED, t]);
+
+      it("a 00:30 Log is late, not early: it wins Night owl over 23:00 and loses Early bird to 06:00", () => {
+        const owl = evening("a", "00:30");
+        const r1 = weekAwards([owl, evening("b", "23:00")], WEEK);
+        expect(award(r1, "nightOwl")).toEqual(["a"]);
+        const r2 = weekAwards([owl, evening("b", "06:00")], WEEK);
+        expect(award(r2, "earlyBird")).toEqual(["b"]);
+      });
+
+      it("03:59 is still the night before; 04:00 is the morning", () => {
+        const r = weekAwards([evening("a", "03:59"), evening("b", "04:00")], WEEK);
+        expect(award(r, "nightOwl")).toEqual(["a"]);
+        expect(award(r, "earlyBird")).toEqual(["b"]);
+      });
+
+      it("a 01:00 Log joins the evening before: last Log of that night, and both make one night, not two Days", () => {
+        // a: Mon 22:00 + Tue 01:00 (= Mon night, last 25:00), Wed 22:00, Thu 22:00 -> lasts 25:00, 22:00, 22:00.
+        const a = times("a", [MON, "22:00"], [TUE, "01:00"], [WED, "22:00"], [THU, "22:00"]);
+        const b = evening("b", "23:00");
+        expect(award(weekAwards([a, b], WEEK), "nightOwl")).toEqual(["b"]); // a's median 22:00 < 23:00
+        // Only 2 nights for c (Mon night twice over): not enough for the Awards.
+        const c = times("c", [MON, "22:00"], [TUE, "01:00"], [WED, "22:00"]);
+        expect(award(weekAwards([c, b], WEEK), "nightOwl")).toBeUndefined();
+      });
+
+      it("reads 00:30 in the Log's own zone, across the date line", () => {
+        // 11:30Z is 00:30 the next day in Auckland (UTC+13) and 01:30 the same day in Honolulu (UTC-10).
+        const nz = (day: string): WeekLog => ({ day, instant: `${addDays(day, -1)}T11:30:00Z`, logZone: "Pacific/Auckland" });
+        const hi = (day: string): WeekLog => ({ day, instant: `${day}T11:30:00Z`, logZone: "Pacific/Honolulu" });
+        const a = person("a", [nz(TUE), nz(WED), nz(THU)]); // 00:30 local
+        const b = person("b", [hi(TUE), hi(WED), hi(THU)]); // 01:30 local
+        const r = weekAwards([a, b], WEEK);
+        expect(award(r, "nightOwl")).toEqual(["b"]);
+        expect(award(r, "earlyBird")).toEqual(["a"]);
+        // The same instants read in UTC are 11:30, no late night at all.
+        const aUtc = person("a", [TUE, WED, THU].map((d) => at(d, "11:30")));
+        expect(award(weekAwards([aUtc, b], WEEK), "nightOwl")).toEqual(["b"]);
+      });
+
+      it("Calendar Days still split at midnight: the 00:30 Log stays on its own Day for the other numbers", () => {
+        const a = times("a", [MON, "00:30"], [TUE, "00:30"], [WED, "00:30"], [THU, "00:30"], [FRI, "00:30"]);
+        expect(personWeek(a.logs, WEEK).total).toBe(5);
+        const b = person("b", days(MON, TUE, WED, THU, FRI));
+        expect(award(weekAwards([a, b], WEEK), "mostRegular")).toEqual(["a", "b"]);
+      });
     });
   });
 
