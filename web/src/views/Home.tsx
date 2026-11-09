@@ -8,6 +8,7 @@ import "./profile.css";
 import { Calendar } from "./calendar/Calendar";
 import { FriendsPanel } from "./friends/FriendsPanel";
 import { LogPanel } from "./log/LogPanel";
+import { LatestSummaryCard } from "./summary/SummaryScreen";
 
 export type HomeView = "log" | "calendar" | "friends";
 
@@ -59,6 +60,7 @@ export function Home({ view = "log" }: { view?: HomeView }) {
         <section aria-label="Home" className="empty-home">
           <p>Hi, {me.displayName}.</p>
           <LogPanel homeZone={me.homeZone} meId={me.id} />
+          <LatestSummaryCard />
         </section>
       )}
       <button type="button" className="link sign-out" onClick={() => void releaseThisDevice().finally(signOut)}>Sign out</button>

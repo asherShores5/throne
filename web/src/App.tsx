@@ -7,6 +7,7 @@ import { Home } from "./views/Home";
 import { Join } from "./views/Join";
 import { Login } from "./views/Login";
 import { Settings } from "./views/Settings";
+import { SummaryScreen } from "./views/summary/SummaryScreen";
 
 export function App() {
   const [configured, setConfigured] = useState(false);
@@ -35,5 +36,6 @@ export function App() {
   if (path === "/invite") return <Join />;
   if (!signedIn) return <Login />;
   if (path === "/settings") return <Settings />;
+  if (path === "/summary") return <SummaryScreen />;
   return <Home view={path === "/calendar" ? "calendar" : path === "/friends" ? "friends" : "log"} />;
 }
