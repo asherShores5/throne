@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { listFriends, type Friend } from "../../api/friend";
 import type { Profile } from "../../api/profile";
+import { calendarLink } from "../../deepLink";
+import { useSearch } from "../../route";
 import { MonthCalendar, type Person } from "./MonthCalendar";
 import { useRefreshOnFocus } from "./refresh";
 
@@ -12,7 +14,13 @@ const EVERYONE = "everyone";
 
 export function Calendar({ me }: { me: Profile }) {
   const [friends, setFriends] = useState<Friend[]>([]);
-  const [picked, setPicked] = useState<string>(me.id);
+  // A push's Day link ("/calendar?who=<sub>&day=<Day>") picks whose Calendar and opens that Day.
+  const search = useSearch();
+  const link = calendarLink(search);
+  const [picked, setPicked] = useState<string>(link.who ?? me.id);
+  useEffect(() => {
+    if (link.day) setPicked(link.who ?? me.id);
+  }, [search]); // only when the link changes
 
   // Offline (or any failure) keeps whatever list is showing: Me always works.
   const loadFriends = useCallback(() => void listFriends().then(setFriends, () => {}), []);
@@ -47,7 +55,7 @@ export function Calendar({ me }: { me: Profile }) {
           ))}
         </div>
       )}
-      <MonthCalendar people={people} directory={everyone} combined={current === EVERYONE} viewerZone={me.homeZone} />
+      <MonthCalendar key={link.day ? search : ""} openDay={link.day} people={people} directory={everyone} combined={current === EVERYONE} viewerZone={me.homeZone} />
     </>
   );
 }

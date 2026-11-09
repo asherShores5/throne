@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { signOut } from "../auth";
+import { releaseThisDevice, sendQueuedDeletes } from "../notifications";
 import type { Profile } from "../api/profile";
 import { onLink } from "../route";
 import { loadMeCached } from "../sync/profileCache";
@@ -22,6 +23,8 @@ export function Home({ view = "log" }: { view?: HomeView }) {
 
   useEffect(() => {
     loadMeCached().then(setMe, (e) => setError((e as Error).message));
+    // A push sign-out delete that couldn't go out offline (notifications.ts).
+    void sendQueuedDeletes().catch(() => {});
   }, []);
 
   const tab = (to: string, name: string, v: HomeView) => (
@@ -58,7 +61,7 @@ export function Home({ view = "log" }: { view?: HomeView }) {
           <LogPanel homeZone={me.homeZone} meId={me.id} />
         </section>
       )}
-      <button type="button" className="link sign-out" onClick={() => void signOut()}>Sign out</button>
+      <button type="button" className="link sign-out" onClick={() => void releaseThisDevice().finally(signOut)}>Sign out</button>
     </main>
   );
 }
