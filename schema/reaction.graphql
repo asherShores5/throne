@@ -1,0 +1,41 @@
+# Reactions and Comments (ticket 08). Resolvers: api/src/resolvers/reaction.ts; rules: shared/src/reaction.ts.
+# Plain comments, not "descriptions": AppSync has rejected described types before.
+# They live on the Log they answer. The Log's owner sees all of them; anyone else sees only their own.
+
+# One emoji a Friend put on a Log (one per person per Log).
+type Reaction {
+  # The author's Profile id.
+  author: ID!
+  # One of the 6 fixed emoji.
+  emoji: String!
+}
+
+# A short text a Friend wrote on a Log.
+type Comment {
+  # A UUID the client made, so a retried add is the same Comment.
+  id: ID!
+  # The author's Profile id.
+  author: ID!
+  # Up to 200 characters.
+  text: String!
+  # When it was written, ISO 8601 UTC.
+  at: AWSDateTime!
+}
+
+extend type Log {
+  # By author id; only the ones the caller may see.
+  reactions: [Reaction!]!
+  # Oldest first; only the ones the caller may see.
+  comments: [Comment!]!
+}
+
+extend type Mutation {
+  # Put (or with emoji null, take off) the caller's Reaction on a Friend's Log. Answers with the Log as
+  # the caller sees it. Anyone who isn't the owner's Friend right now gets NotFound ("No such Log").
+  setReaction(owner: ID!, log: ID!, emoji: String): Log!
+  # Write a Comment on a Friend's Log (at most 20 on a Log). Retrying the same id adds it once.
+  addComment(owner: ID!, log: ID!, id: ID!, text: String!): Log!
+  # Delete a Comment: the author may delete their own, the Log's owner any on their Log. Deleting one
+  # that's gone succeeds.
+  deleteComment(owner: ID!, log: ID!, id: ID!): Log!
+}

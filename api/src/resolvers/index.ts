@@ -5,9 +5,10 @@ import { friend } from "./friend";
 import { invite } from "./invite";
 import { log } from "./log";
 import { profile } from "./profile";
+import { reaction } from "./reaction";
 import type { Resolver, ResolverModule } from "./types";
 
-const MODULES: ResolverModule[] = [profile, invite, log, friend];
+const MODULES: ResolverModule[] = [profile, invite, log, friend, reaction];
 
 function merge(type: "Query" | "Mutation"): Record<string, Resolver> {
   const out: Record<string, Resolver> = {};

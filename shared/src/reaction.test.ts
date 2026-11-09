@@ -3,7 +3,7 @@ import {
   COMMENT_MAX, COMMENTS_PER_LOG_MAX, REACTION_EMOJI, isReactionEmoji, parseCommentText, visibleResponses, withoutAuthor, type Responses,
 } from "./reaction";
 
-const R: Responses = {
+const R: Required<Responses> = {
   reactions: { b: "👏", c: "😂" },
   comments: [
     { id: "2", author: "c", text: "later", at: "2026-11-09T10:00:00.000Z" },

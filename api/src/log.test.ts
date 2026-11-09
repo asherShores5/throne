@@ -25,7 +25,7 @@ const mine = (who = h.A, from = "2026-11-01", to = "2026-11-30") => h.call(who, 
 describe("one-tap Log", () => {
   it("saves a Log at the server's now, in the Profile's Home zone, with its Day", async () => {
     const log = await create();
-    expect(log).toEqual({ id: id(1), instant: NOW, logZone: "America/Los_Angeles", day: "2026-11-08", flags: [] });
+    expect(log).toEqual({ id: id(1), instant: NOW, logZone: "America/Los_Angeles", day: "2026-11-08", flags: [], reactions: [], comments: [] });
     expect(await mine()).toEqual([log]);
   });
 
@@ -110,7 +110,7 @@ describe("edit", () => {
   it("replaces the Details; leaving the time out keeps it", async () => {
     await create(h.A, { duration: 5, note: "first" });
     const edited = await h.call(h.A, "updateLog", { log: { id: id(1), bristolType: 3, flags: ["blood"] } });
-    expect(edited).toEqual({ id: id(1), instant: NOW, logZone: "America/Los_Angeles", day: "2026-11-08", bristolType: 3, flags: ["blood"] });
+    expect(edited).toEqual({ id: id(1), instant: NOW, logZone: "America/Los_Angeles", day: "2026-11-08", bristolType: 3, flags: ["blood"], reactions: [], comments: [] });
     expect(await mine()).toEqual([edited]);
   });
 
