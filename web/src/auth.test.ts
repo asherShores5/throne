@@ -257,4 +257,18 @@ describe("sign-up with an Invite", () => {
     const auth = await launch();
     await expect(auth.signUpWithInvite(TOKEN, "asher", "Correct horse 42")).rejects.toThrow("That username is taken. Pick another.");
   });
+
+  it("the trigger's taken-username and try-again answers keep the Invite usable (not InviteRefusedError)", async () => {
+    cognito.SignUp = [
+      { status: 400, body: { __type: "UserLambdaValidationException", message: "PreSignUp failed with error That username is taken. Pick another.." } },
+      { status: 400, body: { __type: "UserLambdaValidationException", message: "PreSignUp failed with error Sign-up couldn't finish. Try again in a minute.." } },
+    ];
+    const auth = await launch();
+    const taken = await auth.signUpWithInvite(TOKEN, "asher", "Correct horse 42").catch((e) => e);
+    expect(taken).not.toBeInstanceOf(auth.InviteRefusedError);
+    expect(taken.message).toBe("That username is taken. Pick another.");
+    const later = await auth.signUpWithInvite(TOKEN, "asher2", "Correct horse 42").catch((e) => e);
+    expect(later).not.toBeInstanceOf(auth.InviteRefusedError);
+    expect(later.message).toBe("Sign-up couldn't finish. Try again in a minute.");
+  });
 });

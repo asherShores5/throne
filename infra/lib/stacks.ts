@@ -18,6 +18,11 @@ import {
 import type { Construct } from "constructs";
 import { QUERY_DEPTH_LIMIT, composeSchemaDir, rootFields } from "../../schema/compose";
 import { SCHEDULED_RUN } from "../../shared/src/push";
+import { DYNAMO_ACCESS, type LambdaName } from "../../api/src/dynamoAccess";
+
+/** Grant a Lambda exactly its DynamoDB actions from api/src/dynamoAccess.ts (the fake table enforces the same list). */
+const grantTable = (table: dynamodb.ITableV2, fn: lambda.IFunction, name: LambdaName) =>
+  table.grant(fn, ...DYNAMO_ACCESS[name].map((a) => `dynamodb:${a}`));
 
 /** Served by the hosting stacks. Also the passkey relying party: changing it orphans every passkey. */
 export const APP_DOMAIN = "throne.ashershores.com";
@@ -105,8 +110,8 @@ export class AppStack extends Stack {
       bundling: { minify: true, sourceMap: true, format: nodejs.OutputFormat.ESM, target: "node22" },
       logGroup: new logs.LogGroup(this, "PreSignUpLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
     });
-    // Spending an Invite is one conditional UpdateItem; it reads and writes nothing else.
-    table.grant(preSignUp, "dynamodb:UpdateItem");
+    // Read the Invite (GetItem), then spend it with one conditional UpdateItem; nothing else on the table.
+    grantTable(table, preSignUp, "preSignUp");
 
     const userPool = (this.userPool = new cognito.UserPool(this, "Users", {
       userPoolName: "throne",
@@ -125,6 +130,14 @@ export class AppStack extends Stack {
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     }));
+    // The trigger asks whether a username is taken before it spends an Invite (ticket 12): AdminGetUser on
+    // this pool only. A separate policy, not the role's default one: the function doesn't wait for it, so the
+    // pool -> trigger -> role chain has no cycle (the pool ID comes from the trigger event, not env). Until it
+    // exists (first deploy only) the trigger fails closed with "try again" and the Invite stays open.
+    new iam.Policy(this, "PreSignUpUserLookup", {
+      roles: [preSignUp.role!],
+      statements: [new iam.PolicyStatement({ actions: ["cognito-idp:AdminGetUser"], resources: [userPool.userPoolArn] })],
+    });
     this.client = userPool.addClient("Web", {
       authFlows: { user: true },
       generateSecret: false,
@@ -152,7 +165,7 @@ export class AppStack extends Stack {
     });
     // Single-item reads/writes and queries (transactions use the same per-item actions, plus ConditionCheckItem
     // for a transaction's ConditionCheck); never Scan or Batch*.
-    table.grant(fn, "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:ConditionCheckItem");
+    grantTable(table, fn, "api");
     // Delete Profile ends by deleting the caller's own Cognito user (api/src/cognito.ts). The pool ID in this env is
     // no cycle: the pool's only trigger is the separate pre-sign-up Lambda, and nothing in the pool refers to this one.
     fn.addEnvironment("USER_POOL_ID", userPool.userPoolId);
@@ -222,7 +235,7 @@ export class AppStack extends Stack {
     // Only what notifier.ts calls: GetItem/Query to read Profiles, prefs, Friendships, Logs, devices;
     // DeleteItem to prune; PutItem (conditional, attribute_not_exists) to store a weekly Summary (ticket 10).
     // ConditionCheckItem: the Summary claim checks nobody in it is being deleted (api/src/resolvers/summary.ts).
-    table.grant(notifier, "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:PutItem", "dynamodb:ConditionCheckItem");
+    grantTable(table, notifier, "notifier");
     // An event push that fails is dropped, never retried: a retry after a partial send would push twice.
     notifier.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(15) });
     // The Notifier only comes up once the keys exist.

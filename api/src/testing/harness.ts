@@ -9,7 +9,7 @@
 // handler.ts and preSignUp.ts read TABLE_NAME at import time, so tests must import the handler through this module
 // (never statically) for the env below to take effect.
 import type { AppSyncIdentityCognito, AppSyncResolverEvent, PreSignUpTriggerEvent } from "aws-lambda";
-import { FakeDocClient } from "./fakeDynamo";
+import { FakeDocClient, asLambda } from "./fakeDynamo";
 
 /** A signed-in Cognito user, as AppSync sees them. The sub is what identifies a Profile. */
 export interface Caller {
@@ -25,7 +25,7 @@ process.env.TABLE_NAME = process.env.TABLE_NAME ?? "test-table";
 
 const { handler, setDocClient, setEventSink, setUserDeleter } = await import("../handler");
 const { QUERY_FIELDS } = await import("../resolvers");
-const { handler: preSignUp } = await import("../preSignUp");
+const { handler: preSignUp, setUserLookup } = await import("../preSignUp");
 const notifier = await import("../notifier");
 
 /** One push the fake push service accepted. */
@@ -56,7 +56,24 @@ let cognitoBroken = false;
 setUserDeleter(async (username) => {
   if (cognitoBroken) throw Object.assign(new Error("Cognito is down"), { name: "InternalErrorException" });
   if (!deletedUsers.includes(username)) deletedUsers.push(username); // like Cognito: deleting twice is one deletion
+  users.delete(username.toLowerCase());
 });
+
+// The pool's usernames (case-insensitive, like this pool): everyone signUp() let in and the API hasn't deleted.
+// (The callers A-D are just tokens; a test that needs one of them in the pool signs them up.)
+const startingUsers = () => new Set<string>();
+let users = startingUsers();
+setUserLookup(async (_pool, username) => {
+  if (cognitoBroken) throw Object.assign(new Error("Cognito is down"), { name: "InternalErrorException" });
+  return users.has(username.toLowerCase());
+});
+
+/** The trigger, then (if it let the sign-up through) Cognito creating the user, as SignUp does. */
+async function runSignUp(event: PreSignUpTriggerEvent) {
+  const out = await asLambda("preSignUp", () => preSignUp(event));
+  users.add(event.userName.toLowerCase());
+  return out;
+}
 
 export interface SignUpOptions {
   /** Where the web app put the token: ClientMetadata (what it sends) or ValidationData. */
@@ -118,6 +135,7 @@ export function harness() {
       eventsBroken = false;
       deletedUsers = [];
       cognitoBroken = false;
+      users = startingUsers();
     },
     /** Cognito usernames the API deleted so far (Delete Profile). */
     deletedUsers: () => deletedUsers,
@@ -130,11 +148,11 @@ export function harness() {
       const todo = events;
       events = [];
       const out = [];
-      for (const e of todo) out.push(await notifier.handler(e));
+      for (const e of todo) out.push(await asLambda("notifier", () => notifier.handler(e)));
       return out;
     },
     /** Invoke the Notifier with any event. */
-    notify: (e: unknown) => notifier.handler(e),
+    notify: (e: unknown) => asLambda("notifier", () => notifier.handler(e)),
     /** Pushes the fake push service accepted since the last call. */
     takePushes: () => {
       const out = pushes;
@@ -147,10 +165,10 @@ export function harness() {
     breakEvents: () => void (eventsBroken = true),
     event: appSyncEvent,
     /** Invoke the handler as `who`. Rejects with the same Error the client would see. */
-    call: (who: Caller, fieldName: string, args: Record<string, unknown> = {}): Promise<any> => handler(appSyncEvent(who, fieldName, args)),
+    call: (who: Caller, fieldName: string, args: Record<string, unknown> = {}): Promise<any> => asLambda("api", () => handler(appSyncEvent(who, fieldName, args))),
     /** Invoke the handler with a raw event (e.g. no identity at all). */
-    raw: (event: AppSyncResolverEvent<Record<string, unknown>>): Promise<any> => handler(event),
+    raw: (event: AppSyncResolverEvent<Record<string, unknown>>): Promise<any> => asLambda("api", () => handler(event)),
     /** Run the Cognito pre-sign-up trigger for a SignUp with this Invite token. Rejects as Cognito would see it. */
-    signUp: (token: string | undefined, username: string, opts?: SignUpOptions) => preSignUp(preSignUpEvent(token, username, opts)),
+    signUp: (token: string | undefined, username: string, opts?: SignUpOptions) => runSignUp(preSignUpEvent(token, username, opts)),
   };
 }

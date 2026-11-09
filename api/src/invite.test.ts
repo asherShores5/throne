@@ -141,6 +141,35 @@ describe("pre-sign-up trigger", () => {
     await expect(h.signUp(a.token, "fed", { triggerSource: "PreSignUp_ExternalProvider" })).rejects.toThrow("Sign-up failed");
   });
 
+  // Whether Cognito refuses a taken username before or after it runs the trigger isn't documented, so the
+  // trigger checks itself: a clash must never spend the Invite (ticket 12).
+  it("a taken username is refused before the Invite is spent; the same link then works with another username", async () => {
+    await h.signUp((await create()).token, "sam");
+    const a = await create();
+    await expect(h.signUp(a.token, "sam")).rejects.toThrow(/^That username is taken\. Pick another\.$/);
+    await expect(h.signUp(a.token, "SAM")).rejects.toThrow(/taken/); // usernames are case-insensitive
+    expect((await list()).map((i: { token: string }) => i.token)).toEqual([a.token]);
+    await expect(h.signUp(a.token, "newbie")).resolves.toBeDefined();
+    await expect(h.signUp(a.token, "newbie2")).rejects.toThrow("Sign-up failed");
+  });
+
+  it("says nothing about usernames without an open Invite (no username probing)", async () => {
+    const used = await create();
+    await h.signUp(used.token, "first");
+    for (const t of ["AAECAwQFBgcICQoLDA0ODw", used.token]) {
+      await expect(h.signUp(t, "first")).rejects.toThrow(/^Sign-up failed\. Ask for a new Invite\.$/);
+    }
+  });
+
+  it("if Cognito can't be asked about the username, it refuses with try again and leaves the Invite open", async () => {
+    const a = await create();
+    h.breakCognito();
+    await expect(h.signUp(a.token, "newbie")).rejects.toThrow(/^Sign-up couldn't finish\. Try again in a minute\.$/);
+    h.breakCognito(false);
+    expect(await tokens()).toEqual([a.token]);
+    await expect(h.signUp(a.token, "newbie")).resolves.toBeDefined();
+  });
+
   it("stores no password, Display name or username of who spent it, only who made the Invite", async () => {
     const a = await create();
     await h.signUp(a.token, "newbie");

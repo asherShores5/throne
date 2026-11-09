@@ -20,10 +20,10 @@ export const USERS: Record<string, User> = {
 // handler.ts reads these at import time, so import it only after setting them.
 process.env.TABLE_NAME = "e2e-table";
 const { handler, setDocClient, setUserDeleter } = await import("../api/src/handler");
-const { FakeDocClient } = await import("../api/src/testing/fakeDynamo");
+const { FakeDocClient, asLambda } = await import("../api/src/testing/fakeDynamo");
 const { appSyncEvent, preSignUpEvent } = await import("../api/src/testing/harness");
 // The real Invite check (Cognito's pre-sign-up trigger), on the same fake table.
-const { handler: preSignUp } = await import("../api/src/preSignUp");
+const { handler: preSignUp, setUserLookup } = await import("../api/src/preSignUp");
 const { setClock } = await import("../api/src/clock");
 
 /** Run the server on a check's faked clock: server now = `start` plus the real time passed since this call. */
@@ -42,6 +42,8 @@ setDocClient(db);
 export const deletedUsers = new Set<string>();
 setUserDeleter(async (username) => void deletedUsers.add(username));
 const exists = (u: string) => !!USERS[u] && !deletedUsers.has(u);
+// The pre-sign-up trigger asks Cognito (AdminGetUser) whether the username is taken.
+setUserLookup(async (_pool, u) => exists(u.toLowerCase()));
 
 // AppSync supplies these scalars; graphql-js needs them declared.
 const schema = buildSchema(`scalar AWSJSON\nscalar AWSDate\nscalar AWSDateTime\n${composeSchemaDir()}`);
@@ -64,7 +66,7 @@ export async function graphql(token: string | undefined, query: string, variable
     const parent = info.parentType.name;
     if (parent !== "Query" && parent !== "Mutation") return defaultFieldResolver(src, args, ctx, info);
     calls.push({ user: user.username, field: info.fieldName, args });
-    return handler(appSyncEvent(user, info.fieldName, args as Record<string, unknown>));
+    return asLambda("api", () => handler(appSyncEvent(user, info.fieldName, args as Record<string, unknown>)));
   };
   const result = await execute({ schema, document: parse(query), variableValues: variables, fieldResolver });
   return JSON.parse(JSON.stringify(result));
@@ -109,16 +111,17 @@ export async function cognito(target: string, body: any): Promise<{ status: numb
   const wrong = () => fail("NotAuthorizedException", "Incorrect username or password.");
   switch (target) {
     case "SignUp": {
-      // Like Cognito: the username and password policy are checked first, then the pre-sign-up trigger.
+      // AWS doesn't document whether Cognito refuses a taken username before or after the pre-sign-up trigger.
+      // The fake takes the worse order (trigger first), so the trigger's own username check is what's tested.
       const u = String(body.Username ?? "");
-      if (USERS[u]) return fail("UsernameExistsException", "User already exists");
       if (String(body.Password ?? "").length < 16) return fail("InvalidPasswordException", "Password did not conform with policy: Password not long enough");
       try {
-        const out = await preSignUp(preSignUpEvent(body.ClientMetadata?.inviteToken, u));
+        const out = await asLambda("preSignUp", () => preSignUp(preSignUpEvent(body.ClientMetadata?.inviteToken, u)));
         if (!out.response.autoConfirmUser) return fail("NotImplemented", "fake Cognito only takes auto-confirmed sign-ups");
       } catch (e) {
         return fail("UserLambdaValidationException", `PreSignUp failed with error ${(e as Error).message}.`);
       }
+      if (exists(u)) return fail("UsernameExistsException", "User already exists");
       USERS[u] = { sub: `sub-${u}`, username: u };
       signedUpPasswords.set(u, body.Password);
       return { status: 200, json: { UserConfirmed: true, UserSub: USERS[u].sub } };
@@ -193,5 +196,5 @@ notifier.setPushSender(async () => {});
 /** Run the hourly schedule (the weekly Summary) as if it were `at`. Leaves the server clock there. */
 export async function runSchedule(at: string) {
   setServerClock(at);
-  return notifier.handler({ run: "summary" });
+  return asLambda("notifier", () => notifier.handler({ run: "summary" }));
 }

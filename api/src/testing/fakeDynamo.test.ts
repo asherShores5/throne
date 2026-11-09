@@ -1,6 +1,6 @@
-import { PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { describe, expect, it } from "vitest";
-import { FakeDocClient } from "./fakeDynamo";
+import { FakeDocClient, asLambda } from "./fakeDynamo";
 
 const put = (Item: Record<string, unknown>, ConditionExpression: string, ExpressionAttributeValues = {}, ExpressionAttributeNames?: Record<string, string>) =>
   new PutCommand({ TableName: "t", Item, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames });
@@ -97,5 +97,31 @@ describe("fakeDynamo refuses expressions DynamoDB (or Throne's rule) would refus
     const db = new FakeDocClient();
     await db.send(update("SET #s = :v", { "#s": "status" }, { ":v": "open" }));
     expect(db.dump()).toEqual([{ PK: "p", SK: "s", status: "open" }]);
+  });
+});
+
+describe("fakeDynamo stands in for IAM (api/src/dynamoAccess.ts)", () => {
+  const check = { ConditionCheck: { TableName: "t", Key: { PK: "p", SK: "s" }, ConditionExpression: "attribute_exists(#pk)", ExpressionAttributeNames: { "#pk": "PK" } } };
+
+  it("refuses an action the running Lambda isn't granted", async () => {
+    const db = new FakeDocClient();
+    await expect(asLambda("preSignUp", () => db.send(new QueryCommand({
+      TableName: "t", KeyConditionExpression: "#pk = :p", ExpressionAttributeNames: { "#pk": "PK" }, ExpressionAttributeValues: { ":p": "p" },
+    })))).rejects.toMatchObject({ name: "AccessDeniedException", message: expect.stringContaining("dynamodb:Query") });
+    await expect(asLambda("preSignUp", () => db.send(new GetCommand({ TableName: "t", Key: { PK: "p", SK: "s" } })))).resolves.toBeDefined();
+  });
+
+  it("checks each action inside a transaction, and writes nothing when one is refused", async () => {
+    const db = new FakeDocClient();
+    db.seed({ PK: "p", SK: "s" });
+    const tx = new TransactWriteCommand({ TransactItems: [{ Put: { TableName: "t", Item: { PK: "q", SK: "s" } } }, check] });
+    await expect(asLambda("preSignUp", () => db.send(tx))).rejects.toMatchObject({ message: expect.stringContaining("dynamodb:PutItem") });
+    expect(db.dump()).toHaveLength(1);
+    await expect(asLambda("api", () => db.send(tx))).resolves.toEqual({});
+  });
+
+  it("checks nothing outside a Lambda (seeding and direct test reads)", async () => {
+    const db = new FakeDocClient();
+    await expect(db.send(new TransactWriteCommand({ TransactItems: [check] }))).rejects.toMatchObject({ name: "TransactionCanceledException" });
   });
 });

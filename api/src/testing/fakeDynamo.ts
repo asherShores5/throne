@@ -5,7 +5,47 @@
 // Stricter than DynamoDB on one point (Throne's rule, spec: API security): every attribute name in
 // an expression must be a #placeholder, so a reserved word (status, name, count, date, ttl...) can
 // never reach the live table bare. Like DynamoDB, unused #names / :values are refused too.
+//
+// It also stands in for IAM: inside asLambda(name, ...) (the harness runs each Lambda that way) any action,
+// including each action inside a transaction, that api/src/dynamoAccess.ts doesn't grant that Lambda is
+// refused with AccessDeniedException, as the live role would. infra grants exactly that list.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { ACTION_OF, DYNAMO_ACCESS, type LambdaName } from "../dynamoAccess";
+
+/** Which Lambda is running (the harness sets it per invocation); outside one (seeding, direct sends) nothing is checked. */
+const running = new AsyncLocalStorage<LambdaName>();
+
+/** Run `fn` as Lambda `name`: the fake then refuses DynamoDB actions that Lambda isn't granted. */
+export function asLambda<T>(name: LambdaName, fn: () => Promise<T>): Promise<T> {
+  return running.run(name, fn);
+}
+
+/** What IAM answers an action the caller's role doesn't allow. */
+export class AccessDeniedException extends Error {
+  name = "AccessDeniedException";
+}
+
+const COMMAND_KIND: [new (...a: any[]) => unknown, string][] = [
+  [GetCommand, "GetCommand"], [PutCommand, "PutCommand"], [UpdateCommand, "UpdateCommand"],
+  [DeleteCommand, "DeleteCommand"], [QueryCommand, "QueryCommand"],
+];
+
+/** Refuse, like IAM, an action the running Lambda isn't granted. */
+function authorize(cmd: unknown) {
+  const lambda = running.getStore();
+  if (!lambda) return;
+  const kinds = cmd instanceof TransactWriteCommand
+    ? (cmd.input.TransactItems ?? []).flatMap((t) => Object.keys(t).filter((k) => (t as Record<string, unknown>)[k]))
+    : [COMMAND_KIND.find(([c]) => cmd instanceof c)?.[1] ?? (cmd as object)?.constructor?.name ?? "?"];
+  for (const kind of kinds) {
+    const action = ACTION_OF[kind];
+    if (!action) unsupported("command", kind);
+    if (!(DYNAMO_ACCESS[lambda] as readonly string[]).includes(action)) {
+      throw new AccessDeniedException(`${lambda} is not authorized to perform dynamodb:${action} (api/src/dynamoAccess.ts)`);
+    }
+  }
+}
 
 type Rec = Record<string, unknown>;
 type Names = Record<string, string> | undefined;
@@ -147,6 +187,7 @@ export class FakeDocClient {
   }
 
   async send(cmd: unknown): Promise<any> {
+    authorize(cmd);
     if (cmd instanceof TransactWriteCommand) return this.transactWrite(cmd.input);
     if (cmd instanceof GetCommand) {
       const r = this.table.get(keyOf(cmd.input.Key!));
