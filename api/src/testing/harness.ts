@@ -23,7 +23,7 @@ export const CALLERS = { A: caller("a"), B: caller("b"), C: caller("c"), D: call
 
 process.env.TABLE_NAME = process.env.TABLE_NAME ?? "test-table";
 
-const { handler, setDocClient, setEventSink } = await import("../handler");
+const { handler, setDocClient, setEventSink, setUserDeleter } = await import("../handler");
 const { QUERY_FIELDS } = await import("../resolvers");
 const { handler: preSignUp } = await import("../preSignUp");
 const notifier = await import("../notifier");
@@ -48,6 +48,14 @@ notifier.setPushSender(async (sub, payload, opts) => {
   const status = failing.get(sub.endpoint);
   if (status) throw Object.assign(new Error(`push service said ${status}`), { statusCode: status });
   pushes.push({ endpoint: sub.endpoint, payload, opts });
+});
+
+// The Cognito users the API deleted (AdminDeleteUser), and a switch to make Cognito unreachable.
+let deletedUsers: string[] = [];
+let cognitoBroken = false;
+setUserDeleter(async (username) => {
+  if (cognitoBroken) throw Object.assign(new Error("Cognito is down"), { name: "InternalErrorException" });
+  deletedUsers.push(username);
 });
 
 export interface SignUpOptions {
@@ -108,7 +116,13 @@ export function harness() {
       pushes = [];
       failing.clear();
       eventsBroken = false;
+      deletedUsers = [];
+      cognitoBroken = false;
     },
+    /** Cognito usernames the API deleted so far (Delete Profile). */
+    deletedUsers: () => deletedUsers,
+    /** Make Cognito unreachable (true) or reachable again (false). */
+    breakCognito: (broken = true) => void (cognitoBroken = broken),
     /** The push events the API handed to the Notifier so far (not yet delivered). */
     events: () => events,
     /** Run the real Notifier on every event so far (in order), as Lambda would; the summary of each run. */
