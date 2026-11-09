@@ -2,10 +2,11 @@
 // schema/<entity>.graphql); infra wires an AppSync resolver for every Query/Mutation field in the
 // schema, so a new field needs only its schema line and its resolver here.
 import { invite } from "./invite";
+import { log } from "./log";
 import { profile } from "./profile";
 import type { Resolver, ResolverModule } from "./types";
 
-const MODULES: ResolverModule[] = [profile, invite];
+const MODULES: ResolverModule[] = [profile, invite, log];
 
 function merge(type: "Query" | "Mutation"): Record<string, Resolver> {
   const out: Record<string, Resolver> = {};

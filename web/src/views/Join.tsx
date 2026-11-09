@@ -1,3 +1,4 @@
+import "./profile.css";
 import { useState } from "react";
 import { AVATAR_COLORS, AVATAR_EMOJI, cleanDisplayName, cleanUsername, inviteTokenFromHash, passwordProblem, type Avatar } from "@throne/shared";
 import { InviteRefusedError, isSignedIn, signUpWithInvite } from "../auth";

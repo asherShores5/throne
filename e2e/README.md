@@ -11,6 +11,8 @@ Not a workspace, so CI never installs it.
     npm run build:web          # repo root
     cd e2e && npm install && npx playwright install chromium
     npx tsx smoke.ts           # walking skeleton: invite-only sign-in page, password sign-in, home screen, Profile created once, CSP, sign out
+    npx tsx invites.ts         # Invite link in Settings, sign-up via the link (real pre-sign-up trigger), passkey, bad/used/revoked links, cap, Settings edits
+    npx tsx log.ts             # one-tap Log: tap, Undo toast, details sheet, edit (move Day), delete
 
 Screenshots go to `/tmp/e2e-throne-<checkout folder>/` (override with `E2E_OUT`), so parallel
 worktrees don't overwrite each other. Add a new check script per feature area using `checklist()`

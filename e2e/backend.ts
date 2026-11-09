@@ -24,6 +24,13 @@ const { FakeDocClient } = await import("../api/src/testing/fakeDynamo");
 const { appSyncEvent, preSignUpEvent } = await import("../api/src/testing/harness");
 // The real Invite check (Cognito's pre-sign-up trigger), on the same fake table.
 const { handler: preSignUp } = await import("../api/src/preSignUp");
+const { setClock } = await import("../api/src/clock");
+
+/** Run the server on a check's faked clock: server now = `start` plus the real time passed since this call. */
+export function setServerClock(start: string | Date) {
+  const skew = new Date(start).getTime() - Date.now();
+  setClock(() => Date.now() + skew);
+}
 
 export const db = new FakeDocClient();
 setDocClient(db);

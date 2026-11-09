@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { GetCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { INVITE_TTL_MS, MAX_OPEN_INVITES, isInviteToken } from "@throne/shared";
+import { now } from "../clock";
 import { UserError, invalid } from "../errors";
 import { INVITE_SLOT_PREFIX, TABLE, ddb, inviteKey, profilePk } from "../table";
 import type { ResolverModule } from "./types";
@@ -31,7 +32,7 @@ interface Slot {
 }
 
 const slotKey = (sub: string, n: number) => ({ PK: profilePk(sub), SK: `${INVITE_SLOT_PREFIX}${n}` });
-const isOpen = (r: InviteRecord | undefined, now: number): r is InviteRecord => r?.status === "open" && r.expiresAt > now;
+const isOpen = (r: InviteRecord | undefined, at: number): r is InviteRecord => r?.status === "open" && r.expiresAt > at;
 const out = (token: string, r: InviteRecord): Invite => ({
   token,
   createdAt: new Date(r.createdAt).toISOString(),
@@ -62,11 +63,11 @@ async function slots(sub: string): Promise<Slot[]> {
 }
 
 async function tryCreate(sub: string): Promise<Invite | "full" | "raced"> {
-  const now = Date.now();
-  const free = (await slots(sub)).find((s) => !isOpen(s.invite, now));
+  const t = now();
+  const free = (await slots(sub)).find((s) => !isOpen(s.invite, t));
   if (!free) return "full";
   const token = randomBytes(16).toString("base64url");
-  const rec: InviteRecord = { creator: sub, createdAt: now, expiresAt: now + INVITE_TTL_MS, status: "open" };
+  const rec: InviteRecord = { creator: sub, createdAt: t, expiresAt: t + INVITE_TTL_MS, status: "open" };
   try {
     await ddb().send(
       new TransactWriteCommand({
@@ -102,9 +103,9 @@ async function tryCreate(sub: string): Promise<Invite | "full" | "raced"> {
 export const invite: ResolverModule = {
   Query: {
     async invites(ctx) {
-      const now = Date.now();
+      const t = now();
       return (await slots(ctx.sub))
-        .filter((s): s is Slot & { token: string; invite: InviteRecord } => !!s.token && isOpen(s.invite, now))
+        .filter((s): s is Slot & { token: string; invite: InviteRecord } => !!s.token && isOpen(s.invite, t))
         .sort((a, b) => a.invite.createdAt - b.invite.createdAt)
         .map((s) => out(s.token, s.invite));
     },

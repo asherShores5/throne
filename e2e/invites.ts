@@ -144,14 +144,14 @@ await c.check("Settings edits the Display name and Avatar; Home zone follows the
 
   const zone = p.getByRole("region", { name: "Home zone" });
   await expect(zone.getByLabel("Follow this device")).toBeChecked();
-  await expect(zone.getByLabel("Home zone", { exact: true })).toHaveValue(TIME_ZONE);
-  await expect(zone.getByLabel("Home zone", { exact: true })).toBeDisabled();
+  await expect(zone.getByRole("combobox", { name: "Home zone" })).toHaveValue(TIME_ZONE);
+  await expect(zone.getByRole("combobox", { name: "Home zone" })).toBeDisabled();
   await zone.getByLabel("Follow this device").uncheck();
-  await zone.getByLabel("Home zone", { exact: true }).selectOption("Europe/London");
+  await zone.getByRole("combobox", { name: "Home zone" }).selectOption("Europe/London");
   await expect.poll(() => profileOf("sub-jo")).toMatchObject({ homeZone: "Europe/London", homeZoneAuto: false });
   await shot(p, "phone-settings-dark");
   await p.reload();
-  await expect(p.getByRole("region", { name: "Home zone" }).getByLabel("Home zone", { exact: true })).toHaveValue("Europe/London");
+  await expect(p.getByRole("region", { name: "Home zone" }).getByRole("combobox", { name: "Home zone" })).toHaveValue("Europe/London");
   await p.getByRole("region", { name: "Home zone" }).getByLabel("Follow this device").check();
   await expect.poll(() => profileOf("sub-jo")).toMatchObject({ homeZone: TIME_ZONE, homeZoneAuto: true });
   await p.context().close();

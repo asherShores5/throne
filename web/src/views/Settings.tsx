@@ -1,3 +1,4 @@
+import "./profile.css";
 import { useEffect, useMemo, useState } from "react";
 import { DISPLAY_NAME_MAX, cleanDisplayName, type Avatar } from "@throne/shared";
 import { listPasskeys, registerPasskey } from "../auth";
@@ -87,13 +88,20 @@ function zoneChoices(current: string) {
 
 function HomeZoneSection({ me, onSaved }: { me: Profile; onSaved: (p: Profile) => void }) {
   const [error, setError] = useState<string>();
-  const zones = useMemo(() => zoneChoices(me.homeZone), [me.homeZone]);
+  // Shown at once (a controlled checkbox would snap back until the save answers); undone if it fails.
+  const [shown, setShown] = useState({ homeZone: me.homeZone, homeZoneAuto: me.homeZoneAuto });
+  const zones = useMemo(() => zoneChoices(shown.homeZone), [shown.homeZone]);
 
   async function save(edit: { homeZone: string; homeZoneAuto: boolean }) {
+    const before = shown;
+    setShown(edit);
     setError(undefined);
     try {
-      onSaved(await updateProfile(edit));
+      const p = await updateProfile(edit);
+      setShown({ homeZone: p.homeZone, homeZoneAuto: p.homeZoneAuto });
+      onSaved(p);
     } catch (err) {
+      setShown(before);
       setError(plainMessage(err));
     }
   }
@@ -102,13 +110,13 @@ function HomeZoneSection({ me, onSaved }: { me: Profile; onSaved: (p: Profile) =
     <section className="card" aria-label="Home zone">
       <h2>Home zone</h2>
       <label className="check">
-        <input type="checkbox" checked={me.homeZoneAuto}
-          onChange={(e) => void save({ homeZone: e.target.checked ? deviceZone() : me.homeZone, homeZoneAuto: e.target.checked })} />
+        <input type="checkbox" checked={shown.homeZoneAuto}
+          onChange={(e) => void save({ homeZone: e.target.checked ? deviceZone() : shown.homeZone, homeZoneAuto: e.target.checked })} />
         Follow this device
       </label>
       <label>
         Home zone
-        <select value={me.homeZone} disabled={me.homeZoneAuto} onChange={(e) => void save({ homeZone: e.target.value, homeZoneAuto: false })}>
+        <select aria-label="Home zone" value={shown.homeZone} disabled={shown.homeZoneAuto} onChange={(e) => void save({ homeZone: e.target.value, homeZoneAuto: false })}>
           {zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}
         </select>
       </label>

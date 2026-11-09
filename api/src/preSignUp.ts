@@ -9,6 +9,7 @@
 import type { PreSignUpTriggerEvent } from "aws-lambda";
 import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { isInviteToken } from "@throne/shared";
+import { now } from "./clock";
 import { TABLE, ddb, inviteKey, isConditionFailed } from "./table";
 
 export { setDocClient } from "./table";
@@ -22,7 +23,7 @@ export async function handler(event: PreSignUpTriggerEvent): Promise<PreSignUpTr
 
   const token = event.request.clientMetadata?.inviteToken ?? event.request.validationData?.inviteToken;
   if (!isInviteToken(token)) throw new Error(SIGN_UP_REFUSED);
-  const now = Date.now();
+  const t = now();
   try {
     await ddb().send(
       new UpdateCommand({
@@ -31,7 +32,7 @@ export async function handler(event: PreSignUpTriggerEvent): Promise<PreSignUpTr
         UpdateExpression: "SET #status = :used, #usedAt = :now, #usedBy = :who",
         ConditionExpression: "#status = :open AND #expiresAt > :now",
         ExpressionAttributeNames: { "#status": "status", "#usedAt": "usedAt", "#usedBy": "usedBy", "#expiresAt": "expiresAt" },
-        ExpressionAttributeValues: { ":used": "used", ":open": "open", ":now": now, ":who": event.userName },
+        ExpressionAttributeValues: { ":used": "used", ":open": "open", ":now": t, ":who": event.userName },
       }),
     );
   } catch (e) {

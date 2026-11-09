@@ -1,6 +1,7 @@
 // The caller's Profile (tickets 01, 02), at PROFILE#<sub> / PROFILE. Schema: schema/profile.graphql.
 import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { cleanDisplayName, isAvatar, isHomeZone, newProfile, type ProfileFields } from "@throne/shared";
+import { now } from "../clock";
 import { invalid } from "../errors";
 import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "../table";
 import type { Ctx, ResolverModule } from "./types";
@@ -91,7 +92,7 @@ export async function ensureProfile(ctx: Ctx, deviceZone: unknown): Promise<Prof
     await ddb().send(
       new PutCommand({
         TableName: TABLE,
-        Item: { ...key(ctx.sub), ...fields, homeZoneAuto: true, createdAt: Date.now() },
+        Item: { ...key(ctx.sub), ...fields, homeZoneAuto: true, createdAt: now() },
         ConditionExpression: "attribute_not_exists(#pk)",
         ExpressionAttributeNames: { "#pk": "PK" },
       }),
