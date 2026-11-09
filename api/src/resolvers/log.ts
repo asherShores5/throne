@@ -292,6 +292,11 @@ async function logsOf(sub: string, from: unknown, to: unknown, viewer: string): 
   if (!isDay(from) || !isDay(to)) throw invalid("from and to are Days (YYYY-MM-DD).");
   if (to < from) throw invalid("to is before from.");
   if (addDays(from, MAX_RANGE_DAYS - 1) < to) throw invalid(`At most ${MAX_RANGE_DAYS} Days at a time.`);
+  return (await logItems(sub, from, to)).map((rec) => out(rec, viewer));
+}
+
+/** The stored Log items of `sub` on the Days from..to, in order (no access check: callers check first). */
+export async function logItems(sub: string, from: string, to: string): Promise<Record<string, unknown>[]> {
   const range = logSortKeyRange(from, to);
   const items: Record<string, unknown>[] = [];
   let start: Record<string, unknown> | undefined;
@@ -308,7 +313,7 @@ async function logsOf(sub: string, from: unknown, to: unknown, viewer: string): 
     items.push(...(r.Items ?? []));
     start = r.LastEvaluatedKey;
   } while (start);
-  return items.map((rec) => out(rec, viewer));
+  return items;
 }
 
 const friendNotFound = () => new UserError("NotFound", "No such Friend.");

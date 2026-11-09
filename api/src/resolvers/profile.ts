@@ -1,9 +1,9 @@
 // The caller's Profile (tickets 01, 02), at PROFILE#<sub> / PROFILE. Schema: schema/profile.graphql.
-import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { cleanDisplayName, isAvatar, isHomeZone, newProfile, type ProfileFields } from "@throne/shared";
 import { now } from "../clock";
 import { invalid } from "../errors";
-import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "../table";
+import { DIRECTORY_PK, PROFILE_SK, TABLE, ddb, directoryKey, isConditionFailed, profilePk } from "../table";
 import type { Ctx, ResolverModule } from "./types";
 
 export interface Profile extends ProfileFields {
@@ -89,21 +89,47 @@ export async function ensureProfile(ctx: Ctx, deviceZone: unknown): Promise<Prof
   if (found) return followDevice(found, deviceZone);
   const fields = newProfile(deviceZone);
   try {
+    // The record and its directory entry together (the Notifier finds Profiles through the directory).
     await ddb().send(
-      new PutCommand({
-        TableName: TABLE,
-        Item: { ...key(ctx.sub), ...fields, homeZoneAuto: true, createdAt: now() },
-        ConditionExpression: "attribute_not_exists(#pk)",
-        ExpressionAttributeNames: { "#pk": "PK" },
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: TABLE,
+              Item: { ...key(ctx.sub), ...fields, homeZoneAuto: true, createdAt: now() },
+              ConditionExpression: "attribute_not_exists(#pk)",
+              ExpressionAttributeNames: { "#pk": "PK" },
+            },
+          },
+          { Put: { TableName: TABLE, Item: directoryKey(ctx.sub) } },
+        ],
       }),
     );
     return { id: ctx.sub, ...fields, homeZoneAuto: true };
   } catch (e) {
-    if (!isConditionFailed(e)) throw e;
+    if (!isConditionFailed(e) && (e as { name?: string })?.name !== "TransactionCanceledException") throw e;
     const winner = await read(ctx.sub);
     if (!winner) throw e;
     return winner;
   }
+}
+
+/** Every Profile id, from the directory (the Notifier's hourly Summary run). */
+export async function profileIds(): Promise<string[]> {
+  const out: string[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "#pk = :pk",
+      ExpressionAttributeNames: { "#pk": "PK" },
+      ExpressionAttributeValues: { ":pk": DIRECTORY_PK },
+      ExclusiveStartKey: start,
+    }));
+    for (const i of r.Items ?? []) out.push(String(i.SK).slice(profilePk("").length));
+    start = r.LastEvaluatedKey;
+  } while (start);
+  return out;
 }
 
 /** The checked fields of an updateProfile input; unknown keys (an `id`, say) are ignored. */

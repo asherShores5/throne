@@ -19,7 +19,9 @@ describe("first sign-in", () => {
     // Both racing first calls answer with the one record that was kept, not each its own.
     const stored = await h.call(h.A, "me");
     expect(both).toEqual([stored, stored]);
-    expect(h.db.dump()).toHaveLength(1);
+    expect(h.db.dump().filter((r) => r.SK === "PROFILE")).toHaveLength(1);
+    // ...and one entry in the Profile directory the Notifier's weekly Summary reads.
+    expect(h.db.dump().filter((r) => r.PK === "PROFILES")).toEqual([{ PK: "PROFILES", SK: `PROFILE#${h.A.sub}` }]);
   });
 
   it("later calls return the same Profile; a call with no usable device zone changes nothing", async () => {
@@ -37,7 +39,7 @@ describe("first sign-in", () => {
     const a = await h.call(h.A, "me", { homeZone: "UTC" });
     const b = await h.call(h.B, "me", { homeZone: "UTC" });
     expect([a.id, b.id]).toEqual([h.A.sub, h.B.sub]);
-    expect(h.db.dump()).toHaveLength(2);
+    expect(h.db.dump().filter((r) => r.SK === "PROFILE")).toHaveLength(2);
   });
 });
 
