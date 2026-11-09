@@ -48,7 +48,7 @@ function writeJSON(key: string, v: unknown) {
   }
 }
 
-let user: string | undefined;
+let username: string | undefined;
 let server: Log[] = [];
 let notices: string[] = [];
 let offline = false;
@@ -70,7 +70,7 @@ const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.del
 
 function setServer(next: Log[]) {
   server = next;
-  if (user) writeJSON(CACHE + user, server);
+  if (username) writeJSON(CACHE + username, server);
 }
 
 function send(op: Op): Promise<unknown> {
@@ -80,11 +80,11 @@ function send(op: Op): Promise<unknown> {
 }
 
 /** Load (or switch to) the signed-in Profile's copy and outbox. */
-function switchUser() {
+function switchProfile() {
   const u = currentUsername();
-  if (u === user && outbox) return;
+  if (u === username && outbox) return;
   clearTimeout(retry);
-  user = u;
+  username = u;
   // A copy saved before Reactions existed has none: clean() fills them in.
   server = ((u && readJSON<Log[]>(CACHE + u)) || []).map(clean);
   notices = [];
@@ -135,9 +135,9 @@ let started = false;
 function start() {
   if (started) return;
   started = true;
-  switchUser();
+  switchProfile();
   onAuthChange(() => {
-    switchUser();
+    switchProfile();
     void flush();
   });
   document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && void resume());
@@ -159,7 +159,7 @@ export function useLogs(): LogsView {
 export async function refreshLogs(from: string, to: string): Promise<void> {
   start();
   const want = (shownDays = { from, to });
-  const u = user;
+  const u = username;
   await flush();
   try {
     // A write confirmed while the reload was on its way may be missing from its answer: ask again.
@@ -167,7 +167,7 @@ export async function refreshLogs(from: string, to: string): Promise<void> {
       const seen = confirmed;
       const logs = await myLogs(from, to);
       // Signed out, or the screen moved on (e.g. another month) while this was on its way.
-      if (u !== user || want !== shownDays) return;
+      if (u !== username || want !== shownDays) return;
       if (seen !== confirmed) continue;
       setServer(logs);
       emit();

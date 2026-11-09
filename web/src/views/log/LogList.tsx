@@ -38,12 +38,12 @@ export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, c
                   <span className="time">{time}</span>
                   <span className="what">
                     {bristol && (
-                      <span className="tag"><BristolIcon type={bristol.type} /> {bristol.type} {bristol.label}</span>
+                      <span className="chip"><BristolIcon type={bristol.type} /> {bristol.type} {bristol.label}</span>
                     )}
-                    {l.duration !== undefined && <span className="tag">{l.duration} min</span>}
-                    {l.flags.map((f) => <span key={f} className="tag flag">{flagLabel(f)}</span>)}
+                    {l.duration !== undefined && <span className="chip">{l.duration} min</span>}
+                    {l.flags.map((f) => <span key={f} className="chip chip-flag">{flagLabel(f)}</span>)}
                     {l.note && <span className="note">{l.note}</span>}
-                    {l.pending && <span className="tag pending-tag" title="Saved on this phone; not on the server yet">Waiting to sync</span>}
+                    {l.pending && <span className="chip chip-pending" title="Saved on this phone; not on the server yet">Waiting to sync</span>}
                   </span>
                   {confirming === l.id ? (
                     <span className="confirm">
