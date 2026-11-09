@@ -1,6 +1,10 @@
 // Table layout. One table, keys PK/SK; every partition belongs to one Profile, keyed by its Cognito sub:
-//   PROFILE#<sub> / PROFILE    the Profile record (Display name, Avatar, Home zone)
-// Later tickets add their items under the same partition (Logs, Friendships, Invites, ...).
+//   PROFILE#<sub> / PROFILE            the Profile record (Display name, Avatar, Home zone)
+//   PROFILE#<sub> / INVITESLOT#<1-3>   one of the Profile's 3 Invite places: { token } of the Invite in it
+// Later tickets add their items under the same partition (Logs, Friendships, ...).
+// Lookup items, found by a secret rather than by Profile:
+//   INVITE#<token> / INVITE            the Invite: creator, createdAt, expiresAt, status open|used|revoked
+//                                       (the pre-sign-up trigger only has the token)
 //
 // Every expression aliases its attribute names (#pk, #status, ...): testing/fakeDynamo.ts refuses a bare
 // name, so a DynamoDB reserved word can't slip through to a live ValidationException.
@@ -11,6 +15,8 @@ export const TABLE = process.env.TABLE_NAME!;
 
 export const profilePk = (sub: string) => `PROFILE#${sub}`;
 export const PROFILE_SK = "PROFILE";
+export const inviteKey = (token: string) => ({ PK: `INVITE#${token}`, SK: "INVITE" });
+export const INVITE_SLOT_PREFIX = "INVITESLOT#";
 
 export type DocClient = Pick<DynamoDBDocumentClient, "send">;
 

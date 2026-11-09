@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { composeSchema, composeSchemaDir, rootFields } from "../../schema/compose";
 
 /** Scalars and directives AppSync supplies; graphql-js needs them declared. */
-const APPSYNC_PRELUDE = "scalar AWSJSON\nscalar AWSDate\ndirective @aws_subscribe(mutations: [String]) on FIELD_DEFINITION\n";
+const APPSYNC_PRELUDE = "scalar AWSJSON\nscalar AWSDate\nscalar AWSDateTime\ndirective @aws_subscribe(mutations: [String]) on FIELD_DEFINITION\n";
 
 describe("schema composition", () => {
   it("folds each file's `extend type Query/Mutation` into one Query and one Mutation type", () => {
