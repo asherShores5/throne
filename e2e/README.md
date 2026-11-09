@@ -15,6 +15,7 @@ Not a workspace, so CI never installs it.
     npx tsx log.ts             # one-tap Log: tap, Undo toast, details sheet, edit (move Day), delete
     npx tsx calendar.ts        # My Calendar: month grid, heat, prev/next, totals, Day sheet, focus + pull-to-refresh
     npx tsx offline.ts         # offline outbox: pending marker, reload offline, replay in order, lost answer, too old on arrival
+    npx tsx friends.ts         # Friends: Friend code, send by code (not found, any case), accept/decline/cancel, auto-accept, regenerate, end Friendship
 
 Screenshots go to `/tmp/e2e-throne-<checkout folder>/` (override with `E2E_OUT`), so parallel
 worktrees don't overwrite each other. Add a new check script per feature area using `checklist()`

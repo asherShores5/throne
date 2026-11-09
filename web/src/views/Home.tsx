@@ -6,14 +6,16 @@ import { onLink } from "../route";
 import { loadMeCached } from "../sync/profileCache";
 import "./profile.css";
 import { PersonCalendar } from "./calendar/PersonCalendar";
+import { FriendsPanel } from "./friends/FriendsPanel";
 import { LogPanel } from "./log/LogPanel";
 
-export type HomeView = "log" | "calendar";
+export type HomeView = "log" | "calendar" | "friends";
 
 /**
- * The signed-in home screen, two tabs: Log ("/": the Log button and recent Logs, views/log/) and
- * Calendar ("/calendar": my month, views/calendar/). Loading it also creates the Profile on a first
- * sign-in (api/profile.ts); offline it opens with the last copy (sync/profileCache.ts).
+ * The signed-in home screen, three tabs: Log ("/": the Log button and recent Logs, views/log/),
+ * Calendar ("/calendar": my month, views/calendar/) and Friends ("/friends": views/friends/). Loading it
+ * also creates the Profile on a first sign-in (api/profile.ts); offline it opens with the last copy
+ * (sync/profileCache.ts).
  */
 export function Home({ view = "log" }: { view?: HomeView }) {
   const [me, setMe] = useState<Profile>();
@@ -42,10 +44,13 @@ export function Home({ view = "log" }: { view?: HomeView }) {
       <nav className="tabs" aria-label="Views">
         {tab("/", "Log", "log")}
         {tab("/calendar", "Calendar", "calendar")}
+        {tab("/friends", "Friends", "friends")}
       </nav>
       {error && <p className="error" role="alert">{error}</p>}
       {!me ? (
         !error && <p className="center">Loading…</p>
+      ) : view === "friends" ? (
+        <FriendsPanel />
       ) : view === "calendar" ? (
         <PersonCalendar loadLogs={myLogs} viewerZone={me.homeZone} editable />
       ) : (
