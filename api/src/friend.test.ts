@@ -28,6 +28,12 @@ afterEach(() => vi.useRealTimers());
 
 const code = (who: Caller): Promise<string> => h.call(who, "myFriendCode");
 const send = async (from: Caller, to: Caller) => h.call(from, "sendFriendRequest", { code: await code(to) });
+/** The opaque id of `from`'s waiting request (to `to`, found by the code typed; else the first). */
+async function sentId(from: Caller, to?: Caller): Promise<string> {
+  const sent: { id: string; code: string }[] = await h.call(from, "sentFriendRequests");
+  const want = to && (await code(to));
+  return (want ? sent.find((r) => r.code === want) : sent[0])!.id;
+}
 const accept = (who: Caller, from: Caller) => h.call(who, "acceptFriendRequest", { from: from.sub });
 const friendsOf = async (who: Caller) => (await h.call(who, "friends")).map((f: { displayName: string }) => f.displayName);
 async function befriend(a: Caller, b: Caller) {
@@ -84,8 +90,29 @@ describe("Friend request", () => {
     expect(await h.call(h.B, "friendRequests")).toEqual([
       { id: h.A.sub, displayName: "Ana", avatar: { emoji: "🚽", color: "#7c5cff" }, sentAt: NOW },
     ]);
-    expect(await h.call(h.A, "sentFriendRequests")).toEqual([{ id: h.B.sub, code: bCode, sentAt: NOW }]);
+    const sent = await h.call(h.A, "sentFriendRequests");
+    expect(sent).toEqual([{ id: expect.any(String), code: bCode, sentAt: NOW }]);
     expect(await h.call(h.A, "friendRequests")).toEqual([]);
+  });
+
+  it("a sent request's id is opaque: never the receiver's Profile id (story 62)", async () => {
+    await send(h.A, h.B);
+    await send(h.A, h.C);
+    const sent = await h.call(h.A, "sentFriendRequests");
+    expect(sent).toHaveLength(2);
+    for (const r of sent) {
+      expect(r.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      expect(JSON.stringify(r)).not.toContain(h.B.sub);
+      expect(JSON.stringify(r)).not.toContain(h.C.sub);
+    }
+    expect(sent[0].id).not.toBe(sent[1].id);
+    // The receiver's id cancels nothing; a made-up or malformed id is NotFound or a no-op.
+    await expect(h.call(h.A, "cancelFriendRequest", { request: h.B.sub })).rejects.toThrow("NotFound");
+    expect(await h.call(h.A, "cancelFriendRequest", { request: "A".repeat(22) })).toBe(true);
+    expect(await h.call(h.B, "friendRequests")).toHaveLength(1);
+    // Another Profile can't cancel A's request with its id.
+    expect(await h.call(h.C, "cancelFriendRequest", { request: sent[0].id })).toBe(true);
+    expect(await h.call(h.A, "sentFriendRequests")).toHaveLength(2);
   });
 
   it("sending again to the same code is the same request", async () => {
@@ -124,7 +151,7 @@ describe("Friend request", () => {
 
   it("the sender can cancel it", async () => {
     await send(h.A, h.B);
-    expect(await h.call(h.A, "cancelFriendRequest", { to: h.B.sub })).toBe(true);
+    expect(await h.call(h.A, "cancelFriendRequest", { request: await sentId(h.A) })).toBe(true);
     expect(await h.call(h.B, "friendRequests")).toEqual([]);
     expect(await h.call(h.A, "sentFriendRequests")).toEqual([]);
     await expect(accept(h.B, h.A)).rejects.toThrow("NotFound");
@@ -188,7 +215,7 @@ describe("limits", () => {
     for (const to of [h.B, h.C, h.D, E, F]) expect(await send(h.A, to)).toBe("SENT");
     await expect(send(h.A, G)).rejects.toThrow("ValidationError: You have 5 Friend requests waiting. Cancel one first.");
     expect(await send(h.A, h.B)).toBe("SENT");
-    await h.call(h.A, "cancelFriendRequest", { to: h.B.sub });
+    await h.call(h.A, "cancelFriendRequest", { request: await sentId(h.A, h.B) });
     expect(await send(h.A, G)).toBe("SENT");
   });
 

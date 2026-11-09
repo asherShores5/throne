@@ -17,6 +17,7 @@ export interface FriendRequest {
 }
 
 export interface SentFriendRequest {
+  /** Opaque: what cancel takes (never the receiver's Profile id). */
   id: string;
   code: string;
   sentAt: string;
@@ -67,8 +68,8 @@ export async function declineFriendRequest(from: string): Promise<void> {
   await gql(`mutation Decline($from: ID!) { declineFriendRequest(from: $from) }`, { from });
 }
 
-export async function cancelFriendRequest(to: string): Promise<void> {
-  await gql(`mutation Cancel($to: ID!) { cancelFriendRequest(to: $to) }`, { to });
+export async function cancelFriendRequest(request: string): Promise<void> {
+  await gql(`mutation Cancel($request: ID!) { cancelFriendRequest(request: $request) }`, { request });
 }
 
 export async function endFriendship(friend: string): Promise<void> {

@@ -6,7 +6,9 @@
 //                                        with the item, so ending the Friendship unfollows both ways.
 //   PROFILE#<sub> / FRIENDCOUNT          { n }: Friends now, so the cap of 3 holds under races
 //   PROFILE#<to> / FRIENDREQ#IN#<from>   { sentAt }: a Friend request waiting for <to>
-//   PROFILE#<from> / FRIENDREQ#OUT#<to>  { code, sentAt }: the same request, as its sender sees it
+//   PROFILE#<from> / FRIENDREQ#OUT#<to>  { code, sentAt, rid }: the same request, as its sender sees it. `rid` is
+//                                        a random id the sender lists and cancels it by, so the sender never
+//                                        learns the receiver's Profile id before they are Friends (story 62).
 //   PROFILE#<sub> / FRIENDSENDS          { times, v }: send times in the last 24 hours (the daily limit)
 //
 // Accepting writes both FRIEND# items, bumps both counts under a condition that each stays at or below
@@ -43,6 +45,9 @@ const PK_NAME = { "#pk": "PK" };
 const notExists = { ConditionExpression: "attribute_not_exists(#pk)", ExpressionAttributeNames: PK_NAME };
 const exists = { ConditionExpression: "attribute_exists(#pk)", ExpressionAttributeNames: PK_NAME };
 const iso = (ms: number) => new Date(ms).toISOString();
+/** A sent Friend request's opaque id: 16 random bytes, base64url (22 characters). */
+const newRequestId = () => randomBytes(16).toString("base64url");
+const isRequestId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{22}$/.test(v);
 
 const codeNotFound = () => new UserError("NotFound", "No Profile has that Friend code.");
 const requestNotFound = () => new UserError("NotFound", "No such Friend request.");
@@ -327,7 +332,7 @@ async function sendRequest(ctx: Ctx, typed: unknown): Promise<"SENT" | "FRIENDS"
       new TransactWriteCommand({
         TransactItems: [
           { Put: { TableName: TABLE, Item: { ...inKey(to, ctx.sub), sentAt }, ...notExists } },
-          { Put: { TableName: TABLE, Item: { ...outKey(ctx.sub, to), code, sentAt }, ...notExists } },
+          { Put: { TableName: TABLE, Item: { ...outKey(ctx.sub, to), code, sentAt, rid: newRequestId() }, ...notExists } },
         ],
       }),
     );
@@ -418,7 +423,7 @@ export const friend: ResolverModule = {
 
     async sentFriendRequests(ctx) {
       return (await query(ctx.sub, OUT_PREFIX))
-        .map((r) => ({ id: r.other, code: formatFriendCode(r.item.code as string), sentAt: r.item.sentAt as number }))
+        .map((r) => ({ id: r.item.rid as string, code: formatFriendCode(r.item.code as string), sentAt: r.item.sentAt as number }))
         .sort(bySentAt)
         .map((r) => ({ ...r, sentAt: iso(r.sentAt) }));
     },
@@ -445,10 +450,12 @@ export const friend: ResolverModule = {
       return true;
     },
 
-    async cancelFriendRequest(ctx, { to }) {
-      const receiver = otherId(to, requestNotFound);
-      await deleteAll([outKey(ctx.sub, receiver), inKey(receiver, ctx.sub)]);
-      return true;
+    async cancelFriendRequest(ctx, { request }) {
+      if (!isRequestId(request)) throw requestNotFound();
+      // At most MAX_PENDING_SENT are waiting, so finding it by its id is one small query.
+      const sent = (await query(ctx.sub, OUT_PREFIX)).find((r) => r.item.rid === request);
+      if (sent) await deleteAll([outKey(ctx.sub, sent.other), inKey(sent.other, ctx.sub)]);
+      return true; // cancelling one that's gone (answered, or already cancelled) succeeds
     },
 
     async endFriendship(ctx, { friend: other }) {

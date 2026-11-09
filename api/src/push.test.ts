@@ -128,7 +128,8 @@ describe("Friend request pushes", () => {
     await enable(h.B);
     await prefs(h.B, { friendRequests: true });
     await h.call(h.A, "sendFriendRequest", { code: await h.call(h.B, "myFriendCode") });
-    await h.call(h.A, "cancelFriendRequest", { to: h.B.sub });
+    const [sent] = await h.call(h.A, "sentFriendRequests");
+    await h.call(h.A, "cancelFriendRequest", { request: sent.id });
     expect(await delivered()).toEqual([]);
   });
 });
