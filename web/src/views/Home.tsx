@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { signOut } from "../auth";
 import { myLogs } from "../api/log";
-import { loadMe, type Profile } from "../api/profile";
+import type { Profile } from "../api/profile";
 import { onLink } from "../route";
+import { loadMeCached } from "../sync/profileCache";
 import "./profile.css";
 import { PersonCalendar } from "./calendar/PersonCalendar";
 import { LogPanel } from "./log/LogPanel";
@@ -12,14 +13,14 @@ export type HomeView = "log" | "calendar";
 /**
  * The signed-in home screen, two tabs: Log ("/": the Log button and recent Logs, views/log/) and
  * Calendar ("/calendar": my month, views/calendar/). Loading it also creates the Profile on a first
- * sign-in (api/profile.ts).
+ * sign-in (api/profile.ts); offline it opens with the last copy (sync/profileCache.ts).
  */
 export function Home({ view = "log" }: { view?: HomeView }) {
   const [me, setMe] = useState<Profile>();
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    loadMe().then(setMe, (e) => setError((e as Error).message));
+    loadMeCached().then(setMe, (e) => setError((e as Error).message));
   }, []);
 
   const tab = (to: string, name: string, v: HomeView) => (

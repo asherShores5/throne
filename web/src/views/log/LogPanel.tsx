@@ -1,9 +1,11 @@
 // The home screen's Log area: one big button that saves a Log for right now, a toast with Undo and
 // "Add details" for a few seconds, and the last 7 days of Logs (the edit window) to edit or delete.
-// Offline queueing is ticket 04 (the outbox); here a failed save just says so.
+// Every write goes through the outbox (sync/logs.ts): it shows at once, works with no signal, and is
+// marked "Waiting to sync" until the server has it.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { addDays, dayOf, localTime } from "@throne/shared";
-import { createLog, deleteLog, errorText, myLogs, newLogId, type Log } from "../../api/log";
+import { errorText, type Log } from "../../api/log";
+import { dismissNotice, logNow as saveNow, refreshLogs, removeLog, useLogs } from "../../sync/logs";
 import { LogEditor } from "./LogEditor";
 import { LogList } from "./LogList";
 import "./log.css";
@@ -12,8 +14,7 @@ import "./log.css";
 export const UNDO_MS = 6000;
 
 export function LogPanel({ homeZone }: { homeZone: string }) {
-  const [logs, setLogs] = useState<Log[]>([]);
-  const [saving, setSaving] = useState(false);
+  const { logs, notices, offline, waiting } = useLogs();
   const [toast, setToast] = useState<{ log?: Log; text: string }>();
   const [editing, setEditing] = useState<Log>();
   const [error, setError] = useState<string>();
@@ -23,7 +24,7 @@ export function LogPanel({ homeZone }: { homeZone: string }) {
   const refresh = useCallback(() => {
     const t = dayOf(Date.now(), homeZone);
     // The edit window (7 days back) plus tomorrow (a Log a few minutes ahead can land there).
-    myLogs(addDays(t, -7), addDays(t, 1)).then(setLogs, (e) => setError(errorText(e)));
+    refreshLogs(addDays(t, -7), addDays(t, 1)).catch((e) => setError(errorText(e)));
   }, [homeZone]);
   useEffect(refresh, [refresh]);
 
@@ -34,39 +35,32 @@ export function LogPanel({ homeZone }: { homeZone: string }) {
   };
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  const upsert = (l: Log) => setLogs((xs) => [...xs.filter((x) => x.id !== l.id), l]);
-  const drop = (id: string) => setLogs((xs) => xs.filter((x) => x.id !== id));
-
-  async function logNow() {
-    setSaving(true);
+  function logNow() {
     setError(undefined);
-    try {
-      const l = await createLog({ id: newLogId(), instant: new Date().toISOString() });
-      upsert(l);
-      showToast({ log: l, text: `Logged at ${localTime(Date.parse(l.instant), l.logZone)}.` });
-    } catch (e) {
-      setError(`Couldn't save: ${errorText(e)}`);
-    } finally {
-      setSaving(false);
-    }
+    const l = saveNow(homeZone);
+    showToast({ log: l, text: `Logged at ${localTime(Date.parse(l.instant), l.logZone)}.` });
   }
 
   async function remove(l: Log, undo = false) {
-    try {
-      await deleteLog(l.id);
-      drop(l.id);
-      showToast({ text: undo ? "Log undone." : "Log deleted." }, 2500);
-    } catch (e) {
-      setError(`Couldn't delete: ${errorText(e)}`);
-    }
+    removeLog(l.id);
+    showToast({ text: undo ? "Log undone." : "Log deleted." }, 2500);
   }
 
   return (
     <div className="log-panel">
-      <button type="button" className="log-button" aria-label="Log now" disabled={saving} onClick={() => void logNow()}>
+      <button type="button" className="log-button" aria-label="Log now" onClick={logNow}>
         <span aria-hidden="true">Log</span>
       </button>
       {error && <p className="error" role="alert">{error}</p>}
+      {notices.map((n, i) => (
+        <p key={i} className="error notice" role="alert">
+          <span>{n}</span>
+          <button type="button" className="link" onClick={() => dismissNotice(i)}>OK</button>
+        </p>
+      ))}
+      {offline && waiting > 0 && (
+        <p className="hint offline-note">Offline. {waiting === 1 ? "1 change" : `${waiting} changes`} will sync when you're back online.</p>
+      )}
 
       <div className="toast-slot" role="status" aria-live="polite">
         {toast && (
@@ -94,7 +88,7 @@ export function LogPanel({ homeZone }: { homeZone: string }) {
         <LogEditor
           log={editing}
           onClose={() => setEditing(undefined)}
-          onSaved={(l) => { upsert(l); setEditing(undefined); showToast({ text: "Saved." }, 2500); }}
+          onSaved={() => { setEditing(undefined); showToast({ text: "Saved." }, 2500); }}
         />
       )}
     </div>

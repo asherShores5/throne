@@ -3,7 +3,8 @@
 // on a Friend's (ticket 07) it's read-only.
 import { useEffect, useState } from "react";
 import { checkLogTime } from "@throne/shared";
-import { deleteLog, errorText, type Log } from "../../api/log";
+import type { Log } from "../../api/log";
+import { removeLog } from "../../sync/logs";
 import { LogEditor } from "../log/LogEditor";
 import { LogList } from "../log/LogList";
 import "../log/log.css";
@@ -24,7 +25,6 @@ export function DaySheet({ day, today, logs, editable, onChanged, onRemoved, onC
   onClose: () => void;
 }) {
   const [editing, setEditing] = useState<Log>();
-  const [error, setError] = useState<string>();
 
   useEffect(() => {
     const esc = (e: KeyboardEvent) => e.key === "Escape" && !editing && onClose();
@@ -32,14 +32,10 @@ export function DaySheet({ day, today, logs, editable, onChanged, onRemoved, onC
     return () => window.removeEventListener("keydown", esc);
   }, [editing, onClose]);
 
+  /** Through the outbox (sync/logs.ts), like the Log tab: works offline, sent when possible. */
   async function remove(l: Log) {
-    setError(undefined);
-    try {
-      await deleteLog(l.id);
-      onRemoved(l.id);
-    } catch (e) {
-      setError(`Couldn't delete: ${errorText(e)}`);
-    }
+    removeLog(l.id);
+    onRemoved(l.id);
   }
 
   const title = longDay(day);
@@ -50,7 +46,6 @@ export function DaySheet({ day, today, logs, editable, onChanged, onRemoved, onC
           <h2>{title}</h2>
           <button type="button" className="link" onClick={onClose}>Close</button>
         </div>
-        {error && <p className="error" role="alert">{error}</p>}
         {logs.length ? (
           <div className="day-logs">
             <LogList
