@@ -40,7 +40,8 @@ async function calendar(opts: Parameters<typeof app.open>[1] = {}): Promise<Page
   setServerClock(CLOCK);
   const p = await app.open("sam", { clock: CLOCK, ...opts });
   c.watch(p);
-  await p.getByRole("button", { name: "Calendar" }).click();
+  await p.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Calendar" }).click();
+  await expect(p).toHaveURL(/\/calendar$/);
   await expect(p.getByRole("heading", { name: "November 2026" })).toBeVisible();
   return p;
 }
@@ -84,11 +85,18 @@ await c.check("each Day shows its count and heat shade; Days with no Logs stay b
 
 await c.check("one range query for the month: first to last Day", async () => {
   await seedMonth();
+  setServerClock(CLOCK);
+  const p = await app.open("sam", { clock: CLOCK });
+  c.watch(p);
+  // The Log tab's recent list makes its own 7-day query first; count only what the Calendar asks for.
+  await expect(p.getByText("No Logs in the last 7 days.").or(p.getByRole("region", { name: "Recent Logs" }).getByRole("listitem").first())).toBeVisible();
   const before = calls.length;
-  const p = await calendar();
+  await p.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Calendar" }).click();
   await expect(cell(p, "2026-11-06").locator(".count")).toHaveText("5");
-  const month = calls.slice(before).filter((x) => x.field === "myLogs" && (x.args as { from: string }).from === "2026-11-01");
-  expect(month.map((x) => x.args)).toEqual([{ from: "2026-11-01", to: "2026-11-30" }]);
+  // Every Calendar load is the whole month at once (a focus refresh may repeat it, never split it).
+  const month = calls.slice(before).filter((x) => x.field === "myLogs");
+  expect(month.length).toBeGreaterThan(0);
+  expect([...new Set(month.map((x) => JSON.stringify(x.args)))]).toEqual([JSON.stringify({ from: "2026-11-01", to: "2026-11-30" })]);
   await p.context().close();
 });
 
