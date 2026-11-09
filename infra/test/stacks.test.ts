@@ -2,6 +2,7 @@ import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";
 import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
+import { LOG as WEB_LOG } from "../../web/src/api/selections";
 import { buildApp } from "../lib/app";
 
 // One synth for the whole file: bundling the API Lambda with esbuild is the slow part.
@@ -130,6 +131,8 @@ describe("API", () => {
     // web/src/api/profile.ts selects `me { ... avatar { emoji color } }`; e2e/backend.ts refuses anything
     // deeper than the cap, as AppSync does. Raise the cap when a real selection needs it, never "just in case".
     expect(queryDepth("query Me($z: String) { me(homeZone: $z) { id displayName homeZone avatar { emoji color } } }")).toBe(QUERY_DEPTH_LIMIT);
+    // The Log selection (web/src/api/log.ts LOG) with its Reactions and Comments is just as deep.
+    expect(queryDepth(`query { myLogs(from: "a", to: "b") { ${WEB_LOG} } }`)).toBe(QUERY_DEPTH_LIMIT);
   });
 
   it("has a Lambda resolver for every Query and Mutation field in schema/", () => {

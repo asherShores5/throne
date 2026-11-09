@@ -1,6 +1,9 @@
 // Logs (schema/log.graphql). The client makes each Log's id, so a retried create is the same Log.
 import type { Comment, Details, Reaction } from "@throne/shared";
 import { gql } from "./gql";
+import { LOG } from "./selections";
+
+export { LOG };
 
 export interface Log extends Details {
   id: string;
@@ -14,8 +17,6 @@ export interface Log extends Details {
   comments: Comment[];
 }
 
-/** Depth 3 (myLogs > reactions > author): exactly QUERY_DEPTH_LIMIT. */
-export const LOG = `id instant logZone day duration bristolType note flags reactions { author emoji } comments { id author text at }`;
 
 /** What a create or edit sends: the time (optional) and every Detail (left out = none). */
 export interface LogInput extends Partial<Details> {
