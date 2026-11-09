@@ -160,6 +160,22 @@ describe("the privacy triangle", () => {
   });
 });
 
+describe("at the same moment", () => {
+  it("two Friends reacting and the owner editing at once all land; none wipes another", async () => {
+    await triangle();
+    await Promise.all([
+      react(h.B, h.A, id(1), "👏"),
+      react(h.C, h.A, id(1), "💩"),
+      comment(h.B, h.A, id(1), 1, "hi"),
+      h.call(h.A, "updateLog", { log: { id: id(1), bristolType: 4 } }),
+    ]);
+    const log = await myLog(h.A);
+    expect(log.bristolType).toBe(4);
+    expect(log.reactions).toHaveLength(2);
+    expect(log.comments).toHaveLength(1);
+  });
+});
+
 describe("cascades", () => {
   it("deleting a Log deletes its Reactions and Comments (and a retried delete is fine)", async () => {
     await triangle();

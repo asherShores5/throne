@@ -7,7 +7,8 @@ const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
 const LA = "America/Los_Angeles";
 
-const server: Log = { id: A, instant: "2026-11-08T18:00:00.000Z", logZone: LA, day: "2026-11-08", duration: 4, flags: [] };
+const server: Log = { id: A, instant: "2026-11-08T18:00:00.000Z", logZone: LA, day: "2026-11-08", duration: 4, flags: [], reactions: [], comments: [] };
+const R = { reactions: [{ author: "sub-b", emoji: "👏" }], comments: [{ id: B, author: "sub-b", text: "hi", at: "2026-11-08T19:00:00.000Z" }] };
 
 describe("applyPending", () => {
   it("shows the server's Logs as they are when nothing is waiting", () => {
@@ -18,15 +19,20 @@ describe("applyPending", () => {
     // 01:30 UTC on the 9th is still the 8th in Los Angeles.
     const ops: Op[] = [{ seq: 1, type: "create", zone: LA, log: { id: B, instant: "2026-11-09T01:30:00.000Z", bristolType: 4, flags: ["urgent"] } }];
     expect(applyPending([], ops)).toEqual([
-      { id: B, instant: "2026-11-09T01:30:00.000Z", logZone: LA, day: "2026-11-08", bristolType: 4, flags: ["urgent"], pending: true },
+      { id: B, instant: "2026-11-09T01:30:00.000Z", logZone: LA, day: "2026-11-08", bristolType: 4, flags: ["urgent"], reactions: [], comments: [], pending: true },
     ]);
   });
 
   it("shows a waiting edit over the server's copy: Details replaced, time kept unless moved, Day from the Log's own zone", () => {
     const keep: Op[] = [{ seq: 1, type: "update", log: { id: A, note: "ok", flags: ["pain"] } }];
-    expect(applyPending([server], keep)).toEqual([{ id: A, instant: server.instant, logZone: LA, day: "2026-11-08", note: "ok", flags: ["pain"], pending: true }]);
+    expect(applyPending([server], keep)).toEqual([{ id: A, instant: server.instant, logZone: LA, day: "2026-11-08", note: "ok", flags: ["pain"], reactions: [], comments: [], pending: true }]);
     const moved: Op[] = [{ seq: 1, type: "update", log: { id: A, instant: "2026-11-07T07:30:00.000Z", flags: [] } }];
     expect(applyPending([server], moved)[0]).toMatchObject({ instant: "2026-11-07T07:30:00.000Z", day: "2026-11-06", pending: true });
+  });
+
+  it("a waiting edit keeps the Log's Reactions and Comments", () => {
+    const ops: Op[] = [{ seq: 1, type: "update", log: { id: A, instant: "2026-11-07T07:30:00.000Z", flags: [] } }];
+    expect(applyPending([{ ...server, ...R }], ops)[0]).toMatchObject({ ...R, day: "2026-11-06", pending: true });
   });
 
   it("hides a Log with a waiting delete, and ignores an edit of a Log it doesn't have", () => {

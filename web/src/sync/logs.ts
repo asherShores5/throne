@@ -14,7 +14,7 @@
 import { useSyncExternalStore } from "react";
 import { currentUsername, onAuthChange } from "../auth";
 import { NetworkError } from "../api/errors";
-import { createLog, deleteLog, myLogs, newLogId, updateLog, type Log, type LogInput } from "../api/log";
+import { clean, createLog, deleteLog, myLogs, newLogId, updateLog, type Log, type LogInput } from "../api/log";
 import { createOutbox, type Op, type Outbox } from "./outbox";
 import { applyPending, refusedText, type ShownLog } from "./pending";
 
@@ -85,7 +85,8 @@ function switchUser() {
   if (u === user && outbox) return;
   clearTimeout(retry);
   user = u;
-  server = (u && readJSON<Log[]>(CACHE + u)) || [];
+  // A copy saved before Reactions existed has none: clean() fills them in.
+  server = ((u && readJSON<Log[]>(CACHE + u)) || []).map(clean);
   notices = [];
   offline = false;
   outbox = !u
@@ -205,6 +206,16 @@ export function removeLog(id: string): void {
 function scheduleRetry() {
   clearTimeout(retry);
   if (outbox?.pending().length) retry = setTimeout(() => void flush(), RETRY_MS);
+}
+
+/**
+ * The server's newer copy of one of my Logs from something outside the outbox (deleting a Comment on it
+ * answers with the Log). Ignored if the Log isn't in the copy any more.
+ */
+export function gotLog(log: Log): void {
+  if (!server.some((l) => l.id === log.id)) return;
+  setServer(server.map((l) => (l.id === log.id ? log : l)));
+  emit();
 }
 
 export function dismissNotice(i: number) {
