@@ -67,6 +67,16 @@ button.link { height: auto; padding: 0.35rem 0; border: 0; background: none; col
   display: inline-grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 50%;
   font-size: 1.35rem; line-height: 1;
 }
+.tabs {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem; padding: 0.25rem; margin: 0.5rem 0 1rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.tabs a {
+  display: grid; place-items: center; min-height: 2.5rem; border-radius: var(--radius-sm);
+  color: var(--muted); text-decoration: none; font-weight: 600;
+}
+.tabs a[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
+.tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .empty-home { display: grid; gap: 0.35rem; place-items: center; text-align: center; min-height: 50vh; align-content: center; }
 .empty-home p { margin: 0; }
 .sign-out { display: block; margin: 2rem auto 0; }

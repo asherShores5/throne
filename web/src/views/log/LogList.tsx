@@ -12,7 +12,18 @@ export function dayLabel(day: string, today: string): string {
   return new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
 }
 
-export function LogList({ logs, today, onEdit, onDelete }: { logs: Log[]; today: string; onEdit: (l: Log) => void; onDelete: (l: Log) => Promise<void> }) {
+export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, canDelete = () => true, oldestFirst = false }: {
+  logs: Log[];
+  today: string;
+  onEdit: (l: Log) => void;
+  onDelete: (l: Log) => Promise<void>;
+  /** Whether a Log still offers Edit (the Calendar's Day sheet hides it past the 7-day window). */
+  canEdit?: (l: Log) => boolean;
+  /** Whether a Log offers Delete (only the owner's do). */
+  canDelete?: (l: Log) => boolean;
+  /** Logs within a Day in time order (the Day sheet) instead of newest first (the recent list). */
+  oldestFirst?: boolean;
+}) {
   const [confirming, setConfirming] = useState<string>();
   const days = [...new Set(logs.map((l) => l.day))].sort().reverse();
   return (
@@ -21,7 +32,7 @@ export function LogList({ logs, today, onEdit, onDelete }: { logs: Log[]; today:
         <section key={day} className="log-day" aria-label={dayLabel(day, today)}>
           <h3>{dayLabel(day, today)}</h3>
           <ul>
-            {logs.filter((l) => l.day === day).sort((a, b) => (a.instant < b.instant ? 1 : -1)).map((l) => {
+            {logs.filter((l) => l.day === day).sort((a, b) => ((a.instant < b.instant) !== oldestFirst ? 1 : -1)).map((l) => {
               const time = localTime(Date.parse(l.instant), l.logZone);
               const bristol = BRISTOL_TYPES.find((b) => b.type === l.bristolType);
               return (
@@ -42,8 +53,8 @@ export function LogList({ logs, today, onEdit, onDelete }: { logs: Log[]; today:
                     </span>
                   ) : (
                     <span className="item-actions">
-                      <button type="button" className="link" aria-label={`Edit Log at ${time}`} onClick={() => onEdit(l)}>Edit</button>
-                      <button type="button" className="link" aria-label={`Delete Log at ${time}`} onClick={() => setConfirming(l.id)}>Delete</button>
+                      {canEdit(l) && <button type="button" className="link" aria-label={`Edit Log at ${time}`} onClick={() => onEdit(l)}>Edit</button>}
+                      {canDelete(l) && <button type="button" className="link" aria-label={`Delete Log at ${time}`} onClick={() => setConfirming(l.id)}>Delete</button>}
                     </span>
                   )}
                 </li>

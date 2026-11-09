@@ -22,5 +22,6 @@ export function App() {
   // An Invite link stays on the landing page through sign-up (which signs in), until it moves on itself.
   if (path === "/invite") return <Join />;
   if (!signedIn) return <Login />;
-  return path === "/settings" ? <Settings /> : <Home />;
+  if (path === "/settings") return <Settings />;
+  return <Home view={path === "/calendar" ? "calendar" : "log"} />;
 }
