@@ -9,11 +9,11 @@
 // in the same transaction, and revoking deletes it (an unknown token is refused like a revoked one). So a
 // Profile's Invites are exactly its 3 places, and Delete Profile (forgetInvitesOf) finds every one.
 import { randomBytes } from "node:crypto";
-import { GetCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { INVITE_TTL_MS, MAX_OPEN_INVITES, isInviteToken } from "@throne/shared";
 import { now } from "../clock";
 import { UserError, invalid } from "../errors";
-import { INVITE_SLOT_PREFIX, TABLE, ddb, inviteKey, isConditionFailed, profilePk } from "../table";
+import { INVITE_SLOT_PREFIX, TABLE, ddb, inviteKey, isCancelled, isConditionFailed, profilePk, queryPrefix } from "../table";
 import type { ResolverModule } from "./types";
 
 export interface Invite {
@@ -42,19 +42,11 @@ const out = (token: string, r: InviteRecord): Invite => ({
   createdAt: new Date(r.createdAt).toISOString(),
   expiresAt: new Date(r.expiresAt).toISOString(),
 });
-const isCancelled = (e: unknown) => (e as { name?: string })?.name === "TransactionCanceledException";
 
 /** The caller's 3 Invite places, each with the Invite in it (if any). */
 async function slots(sub: string): Promise<Slot[]> {
-  const r = await ddb().send(
-    new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :slot)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": profilePk(sub), ":slot": INVITE_SLOT_PREFIX },
-    }),
-  );
-  const tokens = new Map((r.Items ?? []).map((i) => [Number(String(i.SK).slice(INVITE_SLOT_PREFIX.length)), i.token as string]));
+  const items = await queryPrefix(profilePk(sub), INVITE_SLOT_PREFIX);
+  const tokens = new Map(items.map((i) => [Number(String(i.SK).slice(INVITE_SLOT_PREFIX.length)), i.token as string]));
   return Promise.all(
     Array.from({ length: MAX_OPEN_INVITES }, async (_, i) => {
       const n = i + 1;

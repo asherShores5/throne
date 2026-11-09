@@ -17,7 +17,7 @@ import {
 import { now } from "../clock";
 import { emit } from "../events";
 import { UserError, invalid } from "../errors";
-import { TABLE, ddb, isConditionFailed, profilePk } from "../table";
+import { TABLE, ddb, failedConditions, isConditionFailed, profilePk } from "../table";
 import { requireFriend } from "./friend";
 import { ensureProfile } from "./profile";
 import type { Ctx, ResolverModule } from "./types";
@@ -119,13 +119,6 @@ const countDown = (pk: string, day: string) => ({
  */
 export function sameResponses(rec: Record<string, unknown>): { expr: string; values: Record<string, unknown> } {
   return rec.rv === undefined ? { expr: "attribute_not_exists(#rv)", values: {} } : { expr: "#rv = :rv", values: { ":rv": rec.rv } };
-}
-
-/** Which actions of a cancelled transaction failed their condition (index-aligned); undefined if it wasn't that. */
-function failedConditions(e: unknown): boolean[] | undefined {
-  const err = e as { name?: string; CancellationReasons?: { Code?: string }[] };
-  if (err?.name !== "TransactionCanceledException") return undefined;
-  return (err.CancellationReasons ?? []).map((r) => r.Code === "ConditionalCheckFailed");
 }
 
 async function findSk(pk: string, id: string): Promise<string | undefined> {

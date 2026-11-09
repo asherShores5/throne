@@ -11,14 +11,14 @@
 // Health data: it never reads Details; push text comes from shared eventPushPayload (who + what only).
 import { createHash } from "node:crypto";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
-import { DeleteCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import webpush from "web-push";
 import {
   dueSummaryWeek, eventPushPayload, homeZoneOr, isScheduledRun, parsePushEvent, readPushPrefs, summaryPushPayload,
   type PushEvent, type PushPayload, type PushToggles,
 } from "@throne/shared";
 import { now } from "./clock";
-import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "./table";
+import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk, queryPrefix } from "./table";
 import { followersOf, hasFriendRequest, isFriend, profileCard } from "./resolvers/friend";
 import { profileIds } from "./resolvers/profile";
 import { PUSH_PREFIX, pushToggles } from "./resolvers/push";
@@ -83,22 +83,9 @@ interface Device extends PushTarget {
 }
 
 async function devicesOf(sub: string): Promise<Device[]> {
-  const out: Device[] = [];
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": PUSH_PREFIX },
-      ExclusiveStartKey: start,
-    }));
-    for (const i of r.Items ?? []) {
-      out.push({ SK: i.SK as string, endpoint: i.endpoint as string, keys: { p256dh: i.p256dh as string, auth: i.auth as string } });
-    }
-    start = r.LastEvaluatedKey;
-  } while (start);
-  return out;
+  return (await queryPrefix(profilePk(sub), PUSH_PREFIX)).map((i) => ({
+    SK: i.SK as string, endpoint: i.endpoint as string, keys: { p256dh: i.p256dh as string, auth: i.auth as string },
+  }));
 }
 
 export interface RunSummary {

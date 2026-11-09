@@ -16,7 +16,7 @@
 // Reading another Profile's anything goes through isFriend(caller, other): one GetItem on the caller's
 // own partition (ticket 07's Friend Calendar, 08's Reactions, 10's Summary).
 import { randomBytes } from "node:crypto";
-import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import {
   FRIEND_REQUESTS_PER_WINDOW, MAX_FRIENDS, MAX_PENDING_SENT, formatFriendCode, friendCodeFrom, parseFriendCode, sendsInWindow, type Avatar,
 } from "@throne/shared";
@@ -24,7 +24,7 @@ import { now } from "../clock";
 import { emit } from "../events";
 import { clearResponses } from "./reaction";
 import { UserError, invalid } from "../errors";
-import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "../table";
+import { PROFILE_SK, TABLE, ddb, failedConditions, isConditionFailed, profilePk, queryPrefix } from "../table";
 import type { Ctx, ResolverModule } from "./types";
 
 export const FRIEND_PREFIX = "FRIEND#";
@@ -49,13 +49,6 @@ const requestNotFound = () => new UserError("NotFound", "No such Friend request.
 const YOU_FULL = `You already have ${MAX_FRIENDS} Friends.`;
 const THEY_FULL = `They already have ${MAX_FRIENDS} Friends.`;
 
-/** Which actions of a cancelled transaction failed their condition (index-aligned); undefined if it wasn't that. */
-function failedConditions(e: unknown): boolean[] | undefined {
-  const err = e as { name?: string; CancellationReasons?: { Code?: string }[] };
-  if (err?.name !== "TransactionCanceledException") return undefined;
-  return (err.CancellationReasons ?? []).map((r) => r.Code === "ConditionalCheckFailed");
-}
-
 async function get(key: { PK: string; SK: string }) {
   // Strongly consistent: a Friendship that just ended (or a Friend request just declined) must read as gone.
   return (await ddb().send(new GetCommand({ TableName: TABLE, Key: key, ConsistentRead: true }))).Item;
@@ -63,21 +56,7 @@ async function get(key: { PK: string; SK: string }) {
 
 /** Every item under `prefix` in `sub`'s partition, all pages (Delete Profile must see every Friend request). */
 async function query(sub: string, prefix: string) {
-  const items: Record<string, unknown>[] = [];
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(
-      new QueryCommand({
-        TableName: TABLE,
-        KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-        ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-        ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": prefix },
-        ExclusiveStartKey: start,
-      }),
-    );
-    items.push(...(r.Items ?? []));
-    start = r.LastEvaluatedKey;
-  } while (start);
+  const items = await queryPrefix(profilePk(sub), prefix);
   return items.map((i) => ({ other: String(i.SK).slice(prefix.length), item: i }));
 }
 

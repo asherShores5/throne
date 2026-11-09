@@ -17,7 +17,7 @@
 // Every expression aliases its attribute names (#pk, #status, ...): testing/fakeDynamo.ts refuses a bare
 // name, so a DynamoDB reserved word can't slip through to a live ValidationException.
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 export const TABLE = process.env.TABLE_NAME!;
 
@@ -45,3 +45,46 @@ export function setDocClient(c: DocClient) {
 
 /** True for a failed condition on a single write (DynamoDB and the fake both name it so). */
 export const isConditionFailed = (e: unknown) => (e as { name?: string })?.name === "ConditionalCheckFailedException";
+
+/** True when a transaction was cancelled (one of its conditions failed, or a conflicting write raced it). */
+export const isCancelled = (e: unknown) => (e as { name?: string })?.name === "TransactionCanceledException";
+
+/**
+ * For a cancelled transaction: which of its items failed their condition, in TransactItems order. Undefined for
+ * any other error (rethrow it). DynamoDB and the fake both report per-item CancellationReasons.
+ */
+export function failedConditions(e: unknown): boolean[] | undefined {
+  if (!isCancelled(e)) return undefined;
+  const reasons = (e as { CancellationReasons?: { Code?: string }[] }).CancellationReasons ?? [];
+  return reasons.map((r) => r.Code === "ConditionalCheckFailed");
+}
+
+export interface PrefixQuery {
+  /** Highest SK first. */
+  descending?: boolean;
+  /** Stop after this many items. Without it every page is read. */
+  max?: number;
+}
+
+/**
+ * Every item in partition `pk` whose SK starts with `prefix`, following LastEvaluatedKey through all pages (a 1 MB
+ * page can cut a list short, and Delete Profile must see everything). The one way to list items under a prefix.
+ */
+export async function queryPrefix(pk: string, prefix: string, opts: PrefixQuery = {}): Promise<Record<string, unknown>[]> {
+  const items: Record<string, unknown>[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await client.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
+      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
+      ExpressionAttributeValues: { ":pk": pk, ":p": prefix },
+      ExclusiveStartKey: start,
+      ...(opts.descending ? { ScanIndexForward: false } : {}),
+      ...(opts.max ? { Limit: opts.max - items.length } : {}),
+    }));
+    items.push(...(r.Items ?? []));
+    start = r.LastEvaluatedKey;
+  } while (start && !(opts.max && items.length >= opts.max));
+  return items;
+}
