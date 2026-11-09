@@ -226,6 +226,19 @@ describe("signing out", () => {
     expect(relaunched.isSignedIn()).toBe(false);
     expect(relaunched.hasPasskeyHere()).toBe(false);
   });
+
+  it("drops this Profile's copy of their Logs and Profile, keeping only unsent Log writes", async () => {
+    const auth = await signedIn();
+    const u = auth.currentUsername()!;
+    localStorage.setItem(`throne.logs.v1:${u}`, "[1]");
+    localStorage.setItem(`throne.me.v1:${u}`, "{}");
+    localStorage.setItem(`throne.outbox.v1:${u}`, "[2]");
+    cognito.RevokeToken = [{ status: 200, body: {} }];
+    await auth.signOut();
+    expect(localStorage.getItem(`throne.logs.v1:${u}`)).toBeNull();
+    expect(localStorage.getItem(`throne.me.v1:${u}`)).toBeNull();
+    expect(localStorage.getItem(`throne.outbox.v1:${u}`)).toBe("[2]");
+  });
 });
 
 describe("sign-up with an Invite", () => {
@@ -256,5 +269,19 @@ describe("sign-up with an Invite", () => {
     cognito.SignUp = [{ status: 400, body: { __type: "UsernameExistsException", message: "User already exists" } }];
     const auth = await launch();
     await expect(auth.signUpWithInvite(TOKEN, "asher", "Correct horse 42")).rejects.toThrow("That username is taken. Pick another.");
+  });
+
+  it("the trigger's taken-username and try-again answers keep the Invite usable (not InviteRefusedError)", async () => {
+    cognito.SignUp = [
+      { status: 400, body: { __type: "UserLambdaValidationException", message: "PreSignUp failed with error That username is taken. Pick another.." } },
+      { status: 400, body: { __type: "UserLambdaValidationException", message: "PreSignUp failed with error Sign-up couldn't finish. Try again in a minute.." } },
+    ];
+    const auth = await launch();
+    const taken = await auth.signUpWithInvite(TOKEN, "asher", "Correct horse 42").catch((e) => e);
+    expect(taken).not.toBeInstanceOf(auth.InviteRefusedError);
+    expect(taken.message).toBe("That username is taken. Pick another.");
+    const later = await auth.signUpWithInvite(TOKEN, "asher2", "Correct horse 42").catch((e) => e);
+    expect(later).not.toBeInstanceOf(auth.InviteRefusedError);
+    expect(later.message).toBe("Sign-up couldn't finish. Try again in a minute.");
   });
 });

@@ -78,7 +78,7 @@ describe("auth", () => {
     expect(pool.Properties.AutoVerifiedAttributes ?? []).toEqual([]);
   });
 
-  it("the pre-sign-up trigger runs the Invite check with only the table name and only UpdateItem on the table", () => {
+  it("the pre-sign-up trigger: only the table name; GetItem + UpdateItem on the table, AdminGetUser on this pool", () => {
     const fn = app.findResources("AWS::Lambda::Function")[preSignUpId()];
     expect(Object.keys(fn.Properties.Environment.Variables)).toEqual(["TABLE_NAME"]);
     expect(fn.Properties.Handler).toMatch(/handler$/);
@@ -86,9 +86,14 @@ describe("auth", () => {
     const statements = Object.values(app.findResources("AWS::IAM::Policy"))
       .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
       .flatMap((p: any) => p.Properties.PolicyDocument.Statement);
-    expect(statements.map((st: any) => st.Action)).toEqual(["dynamodb:UpdateItem"]);
     const [tableId] = Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"));
-    expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
+    const [poolId] = Object.keys(app.findResources("AWS::Cognito::UserPool"));
+    expect(statements.map((st: any) => ({ actions: [st.Action].flat().sort(), resource: st.Resource }))).toEqual([
+      { actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"], resource: { "Fn::GetAtt": [tableId, "Arn"] } },
+      { actions: ["cognito-idp:AdminGetUser"], resource: { "Fn::GetAtt": [poolId, "Arn"] } },
+    ]);
+    // The function must not wait for the lookup policy (that would be pool -> trigger -> policy -> pool).
+    expect(JSON.stringify(app.findResources("AWS::Lambda::Function")[preSignUpId()].DependsOn ?? [])).not.toMatch(/PreSignUpUserLookup/);
     // Only this pool may invoke it.
     app.hasResourceProperties("AWS::Lambda::Permission", {
       FunctionName: { "Fn::GetAtt": [preSignUpId(), "Arn"] },
@@ -203,7 +208,7 @@ describe("push (least privilege)", () => {
     expect(JSON.stringify(fn.Properties.Environment)).not.toMatch(/vapid/i);
   });
 
-  it("Delete Profile: the API Lambda may only AdminDeleteUser, on this user pool only; nobody else touches Cognito users", () => {
+  it("Delete Profile: the API Lambda may only AdminDeleteUser, on this user pool only; nobody else changes Cognito users", () => {
     const fn = app.findResources("AWS::Lambda::Function")[fnId("ApiFn")];
     const [poolId] = Object.keys(app.findResources("AWS::Cognito::UserPool"));
     const cognito = statementsOf(roleOf(fnId("ApiFn"))).filter((st: any) => actions(st).some((a) => a.startsWith("cognito-idp:")));
@@ -213,7 +218,8 @@ describe("push (least privilege)", () => {
       .filter((p: any) => !JSON.stringify(p.Properties.Roles).includes(roleOf(fnId("ApiFn"))))
       .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
       .flatMap(actions);
-    expect(others.filter((a) => a.startsWith("cognito-idp:"))).toEqual([]);
+    // The pre-sign-up trigger may only look a username up (AdminGetUser, read-only).
+    expect(others.filter((a) => a.startsWith("cognito-idp:"))).toEqual(["cognito-idp:AdminGetUser"]);
   });
 
   it("only the Notifier and the VapidKeys function may touch the VAPID parameters", () => {

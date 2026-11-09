@@ -5,6 +5,7 @@
 // runs out.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { getConfig } from "./config";
+import { forgetOnSignOut } from "./forgetProfile";
 import { HAS_PASSKEY, LAST_USER } from "./storageKeys";
 
 interface Tokens {
@@ -115,6 +116,8 @@ export class InviteRefusedError extends Error {
  * Create a Profile's sign-in from an Invite link, then sign in with it. The token goes as
  * ClientMetadata to the pre-sign-up trigger (api/src/preSignUp.ts), which spends the Invite and
  * auto-confirms. Check the form first (shared/src/signUp.ts): a refused request may still spend it.
+ * The trigger checks a taken username itself before spending (ticket 12), and says so; that and its
+ * "try again" answer leave the Invite open, so the page keeps the form instead of showing "spent".
  */
 export async function signUpWithInvite(inviteToken: string, username: string, password: string) {
   const { clientId } = getConfig();
@@ -122,7 +125,12 @@ export async function signUpWithInvite(inviteToken: string, username: string, pa
   try {
     await cognito("SignUp", { ClientId: clientId, Username: u, Password: password, ClientMetadata: { inviteToken } });
   } catch (e) {
-    if (e instanceof CognitoError && e.type === "UserLambdaValidationException") throw new InviteRefusedError();
+    if (e instanceof CognitoError && e.type === "UserLambdaValidationException") {
+      // Cognito wraps the trigger's message: "PreSignUp failed with error <message>."
+      if (/That username is taken\./.test(e.message)) throw new Error("That username is taken. Pick another.");
+      if (/Try again in a minute\./.test(e.message)) throw new Error("Sign-up couldn't finish. Try again in a minute.");
+      throw new InviteRefusedError();
+    }
     if (e instanceof CognitoError && e.type === "UsernameExistsException") throw new Error("That username is taken. Pick another.");
     throw e;
   }
@@ -211,8 +219,11 @@ export async function freshTokens(): Promise<Tokens> {
 
 export async function signOut() {
   const t = tokens;
+  const u = currentUsername();
   // A device-wide flag that would mislead the next person on a shared device.
   localStorage.removeItem(HAS_PASSKEY);
   save(null);
+  // After save(null): sync/logs.ts has switched away from this user, so nothing writes the copy back.
+  if (u) forgetOnSignOut(localStorage, u);
   if (t) await cognito("RevokeToken", { Token: t.refreshToken, ClientId: getConfig().clientId }).catch(() => {});
 }

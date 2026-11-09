@@ -1,6 +1,7 @@
 // Reaction and Comment rules (GLOSSARY: Reaction, Comment). Pure, shared by the api (what it stores and
 // who may see what) and the web client (the picker and the Comment box). Both live on the Log they
 // answer, so deleting the Log deletes them.
+import { hasHiddenCharacters } from "./text";
 
 /** The 6 fixed Reactions, in picker order. */
 export const REACTION_EMOJI = ["👏", "😂", "😮", "😬", "💪", "💩"] as const;
@@ -10,14 +11,18 @@ export const isReactionEmoji = (v: unknown): v is ReactionEmoji => typeof v === 
 
 /** A Comment is at most this many characters (an emoji counts as one). */
 export const COMMENT_MAX = 200;
-/** Comments per Log, everyone's together: a record cap that protects cost and item size. */
-export const COMMENTS_PER_LOG_MAX = 20;
+/**
+ * Comments per author per Log: a record cap for cost and item size (at most 3 Friends, so 60 on a Log). Per author,
+ * not shared, so hitting it never tells a Friend that others have commented (they can't see those).
+ */
+export const COMMENTS_PER_AUTHOR_MAX = 20;
 
 export function parseCommentText(v: unknown): { ok: true; text: string } | { ok: false; error: string } {
   if (typeof v !== "string") return { ok: false, error: "A Comment is text." };
   const text = v.trim();
   if (!text) return { ok: false, error: "A Comment can't be empty." };
   if ([...text].length > COMMENT_MAX) return { ok: false, error: `A Comment is at most ${COMMENT_MAX} characters.` };
+  if (hasHiddenCharacters(text)) return { ok: false, error: "A Comment can't have control or invisible characters." };
   return { ok: true, text };
 }
 

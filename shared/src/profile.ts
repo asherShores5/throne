@@ -1,5 +1,6 @@
 // A Profile's own fields (GLOSSARY: Profile, Display name, Avatar, Home zone). Pure, shared by the
 // api (what it stores) and the web client (what it offers to pick).
+import { hasHiddenCharacters } from "./text";
 
 /** Avatar emoji choices; the first is the default for a new Profile. */
 export const AVATAR_EMOJI = ["🚽", "👑", "🦆", "🐸", "🐙", "🦊", "🐼", "🌵", "🍑", "🌈", "⭐", "🔥"] as const;
@@ -40,13 +41,13 @@ export const homeZoneOr = (z: unknown): string => (isHomeZone(z) ? z : DEFAULT_H
 
 /**
  * A Display name as stored: trimmed, 1 to DISPLAY_NAME_MAX characters (an emoji counts as one), no
- * control characters. Undefined if it can't be one.
+ * control or invisible format characters (shared/src/text.ts). Undefined if it can't be one.
  */
 export function cleanDisplayName(n: unknown): string | undefined {
   if (typeof n !== "string") return undefined;
   const t = n.trim();
   const len = [...t].length;
-  if (len < 1 || len > DISPLAY_NAME_MAX || /\p{Cc}/u.test(t)) return undefined;
+  if (len < 1 || len > DISPLAY_NAME_MAX || hasHiddenCharacters(t)) return undefined;
   return t;
 }
 

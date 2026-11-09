@@ -18,7 +18,7 @@
 import { randomBytes } from "node:crypto";
 import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import {
-  FRIEND_REQUESTS_PER_WINDOW, MAX_FRIENDS, formatFriendCode, friendCodeFrom, parseFriendCode, sendsInWindow, type Avatar,
+  FRIEND_REQUESTS_PER_WINDOW, MAX_FRIENDS, MAX_PENDING_SENT, formatFriendCode, friendCodeFrom, parseFriendCode, sendsInWindow, type Avatar,
 } from "@throne/shared";
 import { now } from "../clock";
 import { emit } from "../events";
@@ -57,19 +57,28 @@ function failedConditions(e: unknown): boolean[] | undefined {
 }
 
 async function get(key: { PK: string; SK: string }) {
-  return (await ddb().send(new GetCommand({ TableName: TABLE, Key: key }))).Item;
+  // Strongly consistent: a Friendship that just ended (or a Friend request just declined) must read as gone.
+  return (await ddb().send(new GetCommand({ TableName: TABLE, Key: key, ConsistentRead: true }))).Item;
 }
 
+/** Every item under `prefix` in `sub`'s partition, all pages (Delete Profile must see every Friend request). */
 async function query(sub: string, prefix: string) {
-  const r = await ddb().send(
-    new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": prefix },
-    }),
-  );
-  return (r.Items ?? []).map((i) => ({ other: String(i.SK).slice(prefix.length), item: i }));
+  const items: Record<string, unknown>[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await ddb().send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
+        ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
+        ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": prefix },
+        ExclusiveStartKey: start,
+      }),
+    );
+    items.push(...(r.Items ?? []));
+    start = r.LastEvaluatedKey;
+  } while (start);
+  return items.map((i) => ({ other: String(i.SK).slice(prefix.length), item: i }));
 }
 
 /** A Profile id from the arguments (another Profile, never the caller); anything else is not found. */
@@ -327,6 +336,11 @@ async function sendRequest(ctx: Ctx, typed: unknown): Promise<"SENT" | "FRIENDS"
   if (await get(inKey(ctx.sub, to))) {
     await befriend(ctx.sub, to);
     return "FRIENDS";
+  }
+  // A record cap on waiting requests (a re-send of one already waiting is the same request, so it passes).
+  // Read then write, so two racing sends could make it 6: bounded by the 10-a-day limit, so good enough.
+  if (!(await get(outKey(ctx.sub, to))) && (await query(ctx.sub, OUT_PREFIX)).length >= MAX_PENDING_SENT) {
+    throw invalid(`You have ${MAX_PENDING_SENT} Friend requests waiting. Cancel one first.`);
   }
   const sentAt = now();
   try {

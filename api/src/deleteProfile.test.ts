@@ -240,6 +240,44 @@ describe("Delete Profile", () => {
     expect(alexLeftovers()).toEqual([]);
   });
 
+  // Ticket 12: an endFriendship stopped after the Friendship was gone, and never retried, used to leave each side's
+  // Reactions/Comments on the other's Logs with nothing in the author's partition to find them by.
+  it("finds Reactions/Comments both ways left by an interrupted, never-retried endFriendship", async () => {
+    setNow("2026-11-02T12:00:00.000Z");
+    await profile(h.A, "Alex", LA);
+    await profile(h.B, "Sam", LA);
+    await befriend(h.A, h.B);
+    const samLog = await logAt(h.B, "2026-11-03T18:00:00Z");
+    const alexLog = await logAt(h.A, "2026-11-03T19:00:00Z");
+    await react(h.A, h.B, samLog, "💪");
+    await comment(h.A, h.B, samLog, "alex on sam");
+    await comment(h.B, h.A, alexLog, "sam on alex");
+    // The first write (the Friendship transaction) lands, then the Lambda dies before any cleanup.
+    const stop = failWriteAt(1);
+    await expect(h.call(h.B, "endFriendship", { friend: h.A.sub })).rejects.toThrow();
+    stop();
+    expect(await h.call(h.A, "friends")).toEqual([]);
+    expect(alexLeftovers().length).toBeGreaterThan(0);
+
+    expect(await h.call(h.A, "deleteProfile")).toBe(true);
+    expect(alexLeftovers()).toEqual([]);
+    // Sam's Log keeps nothing of Alex's, and Sam's partition has no pointer naming Alex.
+    expect(h.db.dump().filter((r) => r.PK === `PROFILE#${h.B.sub}` && String(r.SK).includes(h.A.sub))).toEqual([]);
+  });
+
+  it("deleting a Log takes the pointers in its Friends' partitions with it (nothing names the owner there)", async () => {
+    setNow("2026-11-02T12:00:00.000Z");
+    await profile(h.A, "Alex", LA);
+    await profile(h.B, "Sam", LA);
+    await befriend(h.A, h.B);
+    const alexLog = await logAt(h.A, "2026-11-03T19:00:00Z");
+    await react(h.B, h.A, alexLog, "👏");
+    await comment(h.B, h.A, alexLog, "sam on alex");
+    expect(h.db.dump().filter((r) => r.PK === `PROFILE#${h.B.sub}` && String(r.SK).startsWith("RESPTO#"))).toHaveLength(1);
+    await h.call(h.A, "deleteLog", { id: alexLog });
+    expect(h.db.dump().filter((r) => String(r.SK).startsWith("RESPTO#") || String(r.SK).startsWith("RESPFROM#"))).toEqual([]);
+  });
+
   it("leaves other Profiles' data alone", async () => {
     await seed();
     const others = () => h.db.dump().filter((r) => r.PK === `PROFILE#${h.D.sub}` || r.PK === `PROFILE#${E.sub}`).map((r) => r.SK).sort();

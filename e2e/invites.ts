@@ -56,7 +56,13 @@ await c.check("a newcomer opens the link, sees it doesn't make them Friends, and
   await p.getByLabel("Password").fill("short");
   await p.getByRole("button", { name: "Create my Profile" }).click();
   await expect(p.getByRole("alert")).toContainText("16");
+  // A taken username (ticket 12): said plainly, the form stays, and the Invite isn't spent.
+  await p.getByLabel("Username").fill("Sam");
   await p.getByLabel("Password").fill(NEW_PASSWORD);
+  await p.getByRole("button", { name: "Create my Profile" }).click();
+  await expect(p.getByRole("alert")).toContainText("That username is taken");
+  expect(db.dump().find((r) => r.PK.startsWith("INVITE#"))).toMatchObject({ status: "open" });
+  await p.getByLabel("Username").fill("Nina");
   await p.getByRole("button", { name: "Create my Profile" }).click();
   await expect(p.getByText("Welcome, Nina")).toBeVisible();
   expect(profileOf("sub-nina")).toMatchObject({ displayName: "Nina", avatar: { emoji: "🦊", color: "#0c8599" }, homeZone: TIME_ZONE });

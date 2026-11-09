@@ -8,6 +8,8 @@
 //      that includes them is refused (resolvers/summary.ts), so nothing new of theirs can appear;
 //   2. the directory entry, so the hourly run stops building their Summary;
 //   3. Friend code, Friend requests, Friendships and their Reactions/Comments on Friends' Logs (friend.ts);
+//      (after a second pass of this step, forgetResponsesOf in reaction.ts also clears Reactions/Comments with
+//      ex-Friends, both ways, found through their own RESPTO#/RESPFROM# pointers: ticket 12);
 //   4. their Invites (invite.ts);
 //   5. their rows and Awards in other Profiles' stored Summaries, and their own Summaries with the pointers to
 //      them under the people in them (summary.ts);
@@ -21,6 +23,7 @@ import { now } from "../clock";
 import { TABLE, ddb, deletedKey, directoryKey, isConditionFailed, profilePk } from "../table";
 import { forgetFriendsOf } from "./friend";
 import { forgetInvitesOf } from "./invite";
+import { forgetResponsesOf } from "./reaction";
 import { forgetOwnSummaries, scrubFromSummaries } from "./summary";
 import type { Ctx, ResolverModule } from "./types";
 
@@ -63,6 +66,8 @@ async function deleteProfile(ctx: Ctx): Promise<true> {
   await forgetOwnSummaries(me);
   // Again, for anything that slipped in while the steps above ran (a Friend request accepted at that moment).
   await forgetFriendsOf(me);
+  // Reactions/Comments with anyone who is no longer a Friend, both ways (an endFriendship that stopped half way).
+  await forgetResponsesOf(me);
   await sweep(me);
   await deleteUser(ctx.username);
   await ddb().send(new UpdateCommand({
