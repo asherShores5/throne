@@ -11,10 +11,13 @@ import {
   aws_lambda as lambda,
   aws_lambda_nodejs as nodejs,
   aws_logs as logs,
+  aws_scheduler as scheduler,
+  aws_scheduler_targets as schedulerTargets,
   custom_resources as cr,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { QUERY_DEPTH_LIMIT, composeSchemaDir, rootFields } from "../../schema/compose";
+import { SCHEDULED_RUN } from "../../shared/src/push";
 
 /** Served by the hosting stacks. Also the passkey relying party: changing it orphans every passkey. */
 export const APP_DOMAIN = "throne.ashershores.com";
@@ -209,13 +212,22 @@ export class AppStack extends Stack {
       },
     });
     notifier.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: vapidParamArns(this) }));
-    // Only what notifier.ts calls: GetItem/Query to read prefs, Friendships, devices; DeleteItem to prune.
-    // Ticket 10 (Summary) adds what it needs.
-    table.grant(notifier, "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DeleteItem");
+    // Only what notifier.ts calls: GetItem/Query to read Profiles, prefs, Friendships, Logs, devices;
+    // DeleteItem to prune; PutItem (conditional, attribute_not_exists) to store a weekly Summary (ticket 10).
+    table.grant(notifier, "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:PutItem");
     // An event push that fails is dropped, never retried: a retry after a partial send would push twice.
     notifier.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(15) });
     // The Notifier only comes up once the keys exist.
     notifier.node.addDependency(vapidKeys);
+
+    // The weekly Summary (ticket 10): every hour at minute 0 UTC, so 08:00 Monday lands on a run in every
+    // whole-hour zone (half-hour zones get it at 08:30). Never retried: the Summary item is the claim, so a
+    // retry would do nothing anyway, and a later run that Monday catches up a missed one.
+    new scheduler.Schedule(this, "NotifierHourly", {
+      description: "Throne Notifier: weekly Summary at Monday 08:00 in each Home zone",
+      schedule: scheduler.ScheduleExpression.cron({ minute: "0" }),
+      target: new schedulerTargets.LambdaInvoke(notifier, { retryAttempts: 0, input: scheduler.ScheduleTargetInput.fromObject(SCHEDULED_RUN) }),
+    });
 
     // The API hands events to the Notifier with an async invoke (api/src/events.ts): that one function only.
     fn.addEnvironment("NOTIFIER_FUNCTION", notifier.functionName);
