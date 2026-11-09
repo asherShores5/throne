@@ -1,7 +1,8 @@
 // Table layout. One table, keys PK/SK; every partition belongs to one Profile, keyed by its Cognito sub:
 //   PROFILE#<sub> / PROFILE            the Profile record (Display name, Avatar, Home zone)
 //   PROFILE#<sub> / INVITESLOT#<1-3>   one of the Profile's 3 Invite places: { token } of the Invite in it
-// Later tickets add their items under the same partition (Logs, Friendships, ...).
+// Later tickets add their items under the same partition (Logs: resolvers/log.ts; Friend code, Friend
+// requests, Friendships: resolvers/friend.ts, which also owns the FRIENDCODE#<code> lookup items).
 // Lookup items, found by a secret rather than by Profile:
 //   INVITE#<token> / INVITE            the Invite: creator, createdAt, expiresAt, status open|used|revoked
 //                                       (the pre-sign-up trigger only has the token)

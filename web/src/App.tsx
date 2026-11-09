@@ -23,5 +23,5 @@ export function App() {
   if (path === "/invite") return <Join />;
   if (!signedIn) return <Login />;
   if (path === "/settings") return <Settings />;
-  return <Home view={path === "/calendar" ? "calendar" : "log"} />;
+  return <Home view={path === "/calendar" ? "calendar" : path === "/friends" ? "friends" : "log"} />;
 }

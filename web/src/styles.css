@@ -68,7 +68,7 @@ button.link { height: auto; padding: 0.35rem 0; border: 0; background: none; col
   font-size: 1.35rem; line-height: 1;
 }
 .tabs {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem; padding: 0.25rem; margin: 0.5rem 0 1rem;
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0.25rem; padding: 0.25rem; margin: 0.5rem 0 1rem;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .tabs a {

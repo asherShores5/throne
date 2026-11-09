@@ -50,7 +50,7 @@ code and UI.
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
   new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
-  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -65,7 +65,13 @@ code and UI.
   pre-sign-up trigger (its own Lambda) that spends an open Invite with one conditional write. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
   Profile is one key range, `myLogs(from, to)`), plus `LOGID#<id>` (id lookup + idempotent create) and
   `LOGDAY#<Day>` (count for the 50-a-Day cap), always written together in one transaction. `clock.ts`: server
-  time for the time rules (seam for e2e).
+  time for the time rules (seam for e2e). `resolvers/friend.ts`: Friend codes (`FRIENDCODE#<code>` lookup plus
+  the Profile's `FRIENDCODE` pointer), Friend requests (`FRIENDREQ#IN#<from>` under the receiver and
+  `FRIENDREQ#OUT#<to>` under the sender, written together), Friendships (`FRIEND#<other>` under each side plus a
+  `FRIENDCOUNT` per Profile; one transaction keeps both at 3 or fewer), the daily send limit (`FRIENDSENDS`).
+  **Every read of another Profile's data goes through `isFriend(caller, other)` or
+  `requireFriend(ctx, other, notFound)`** (one GetItem in the caller's partition; a non-Friend gets the same
+  error as "not found"); also `friendIds(sub)` and `profileCard(sub)` (Display name + Avatar).
 - `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table) and
   `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
   refuses un-aliased attribute names and unused placeholders).
@@ -77,13 +83,13 @@ code and UI.
   table only (asserted in `infra/test/stacks.test.ts`).
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
-  `route.ts` (paths `/`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
-  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `PersonCalendar` (one person's month from an injected `loadLogs(from, to)`, so ticket 07 can show a Friend read-only), `MonthGrid` (cell content from a `day()` callback, for the combined grid), `DaySheet`, `refresh.ts` (focus + pull-to-refresh)). Home has two tabs: `/` Log and `/calendar` Calendar. `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  `route.ts` (paths `/`, `/calendar`, `/friends`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `PersonCalendar` (one person's month from an injected `loadLogs(from, to)`, so ticket 07 can show a Friend read-only), `MonthGrid` (cell content from a `day()` callback, for the combined grid), `DaySheet`, `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `friends.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
