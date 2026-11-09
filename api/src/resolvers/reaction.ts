@@ -14,7 +14,7 @@
 // anyone else only their own (out() in resolvers/log.ts).
 import { QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import {
-  COMMENTS_PER_LOG_MAX, hasResponsesFrom, isLogId, isReactionEmoji, parseCommentText, withoutAuthor, type Comment, type PushEvent, type Responses,
+  COMMENTS_PER_AUTHOR_MAX, hasResponsesFrom, isLogId, isReactionEmoji, parseCommentText, withoutAuthor, type Comment, type PushEvent, type Responses,
 } from "@throne/shared";
 import { now } from "../clock";
 import { emit } from "../events";
@@ -137,7 +137,7 @@ async function addComment(ctx: Ctx, args: Record<string, unknown>): Promise<Log>
   if (!parsed.ok) throw invalid(parsed.error);
   return change(ctx, owner, logId, () => ctx.sub, (r) => {
     if (r.comments.some((c) => c.id === commentId)) return r; // a retry: it's already there
-    if (r.comments.length >= COMMENTS_PER_LOG_MAX) throw invalid(`${COMMENTS_PER_LOG_MAX} Comments on a Log is the limit.`);
+    if (r.comments.filter((c) => c.author === ctx.sub).length >= COMMENTS_PER_AUTHOR_MAX) throw invalid(`${COMMENTS_PER_AUTHOR_MAX} Comments on one Log is the limit.`);
     return { ...r, comments: [...r.comments, { id: commentId, author: ctx.sub, text: parsed.text, at: new Date(now()).toISOString() }] };
   }, ctx.sub, (rec) => ({ kind: "comment", to: owner, from: ctx.sub, logId, day: rec.day as string }));
 }

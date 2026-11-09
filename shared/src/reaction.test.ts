@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  COMMENT_MAX, COMMENTS_PER_LOG_MAX, REACTION_EMOJI, isReactionEmoji, parseCommentText, visibleResponses, withoutAuthor, type Responses,
+  COMMENT_MAX, COMMENTS_PER_AUTHOR_MAX, REACTION_EMOJI, isReactionEmoji, parseCommentText, visibleResponses, withoutAuthor, type Responses,
 } from "./reaction";
 
 const R: Required<Responses> = {
@@ -31,8 +31,8 @@ describe("Comment text", () => {
     expect(parseCommentText("💩".repeat(COMMENT_MAX)).ok).toBe(true);
   });
 
-  it("has a per-Log cap of 20", () => {
-    expect(COMMENTS_PER_LOG_MAX).toBe(20);
+  it("has a cap of 20 per author per Log", () => {
+    expect(COMMENTS_PER_AUTHOR_MAX).toBe(20);
   });
 });
 

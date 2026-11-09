@@ -51,6 +51,13 @@ describe("Display name", () => {
   it("refuses empty, too long, control characters and non-strings", () => {
     for (const n of ["", "   ", "A".repeat(25), "👑".repeat(25), "Sam\nX", "a\u0000b", 7, null, undefined]) expect(cleanDisplayName(n)).toBeUndefined();
   });
+
+  it("refuses invisible format characters that could spoof a name in a push (ticket 12); joined emoji are fine", () => {
+    expect(cleanDisplayName("Sam\u202Egnp")).toBeUndefined();
+    expect(cleanDisplayName("S\u200Bam")).toBeUndefined();
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Sam";
+    expect(cleanDisplayName(family)).toBe(family);
+  });
 });
 
 describe("Avatar", () => {

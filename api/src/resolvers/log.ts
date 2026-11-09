@@ -335,7 +335,7 @@ const friendNotFound = () => new UserError("NotFound", "No such Friend.");
  * anything else so not even the range rules answer a stranger. Reactions and Comments: only the caller's.
  */
 async function friendLogs(ctx: Ctx, { friend, from, to }: Record<string, unknown>): Promise<Log[]> {
-  if (typeof friend !== "string") throw friendNotFound();
+  if (typeof friend !== "string" || !friend || friend.length > 128) throw friendNotFound();
   await requireFriend(ctx, friend, friendNotFound);
   return logsOf(friend, from, to, ctx.sub);
 }

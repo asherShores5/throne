@@ -8,3 +8,4 @@ export * from "./friend";
 export * from "./reaction";
 export * from "./push";
 export * from "./summary";
+export * from "./text";

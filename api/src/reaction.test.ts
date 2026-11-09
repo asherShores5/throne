@@ -75,10 +75,19 @@ describe("Comments", () => {
     await expect(h.call(h.B, "addComment", { owner: h.A.sub, log: id(1), id: "nope", text: "hi" })).rejects.toThrow(/^ValidationError: /);
   });
 
-  it("stops at 20 Comments on a Log", async () => {
+  // Per author (ticket 12): a shared cap would tell a Friend that others have commented, which they can't see.
+  it("stops at 20 Comments per author on a Log; another Friend's count doesn't show through", async () => {
     await triangle();
-    for (let i = 0; i < 20; i++) await comment(i % 2 ? h.B : h.C, h.A, id(1), i, `c${i}`);
-    await expect(comment(h.B, h.A, id(1), 99, "one more")).rejects.toThrow(/^ValidationError: .*20/);
+    for (let i = 0; i < 20; i++) await comment(h.C, h.A, id(1), i, `c${i}`);
+    await expect(comment(h.B, h.A, id(1), 50, "B's first")).resolves.toBeDefined();
+    await expect(comment(h.C, h.A, id(1), 99, "one more")).rejects.toThrow(/^ValidationError: .*20/);
+  });
+
+  it("refuses control and invisible direction-changing characters in a Comment", async () => {
+    await triangle();
+    await expect(comment(h.B, h.A, id(1), 1, "hi\u202Ereversed")).rejects.toThrow(/^ValidationError: /);
+    await expect(comment(h.B, h.A, id(1), 2, "bell\u0007")).rejects.toThrow(/^ValidationError: /);
+    await expect(comment(h.B, h.A, id(1), 3, "👨‍👩‍👧 family")).resolves.toBeDefined();
   });
 
   it("the author can delete their own; the Log owner can delete anyone's; nobody else can", async () => {

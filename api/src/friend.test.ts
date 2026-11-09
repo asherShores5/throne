@@ -182,6 +182,16 @@ describe("limits", () => {
     expect(await send(h.A, h.C)).toBe("SENT");
   });
 
+  it("at most 5 sent requests waiting at once; re-sending one already waiting still works", async () => {
+    const G: Caller = { sub: "sub-g", username: "g" };
+    await h.call(G, "me", { homeZone: "America/Los_Angeles" });
+    for (const to of [h.B, h.C, h.D, E, F]) expect(await send(h.A, to)).toBe("SENT");
+    await expect(send(h.A, G)).rejects.toThrow("ValidationError: You have 5 Friend requests waiting. Cancel one first.");
+    expect(await send(h.A, h.B)).toBe("SENT");
+    await h.call(h.A, "cancelFriendRequest", { to: h.B.sub });
+    expect(await send(h.A, G)).toBe("SENT");
+  });
+
   it("the daily limit holds when sends race", async () => {
     const codes = await Promise.all([h.B, h.C, h.D, E, F].map(code));
     for (let i = 0; i < 8; i++) await h.call(h.A, "sendFriendRequest", { code: "ZZZ-ZZZ" }).catch(() => {});

@@ -17,7 +17,7 @@ export { setUserDeleter } from "./cognito";
  */
 async function refuseDeleted(sub: string, field: string) {
   if (field === "deleteProfile") return;
-  const r = await ddb().send(new GetCommand({ TableName: TABLE, Key: deletedKey(sub) }));
+  const r = await ddb().send(new GetCommand({ TableName: TABLE, Key: deletedKey(sub), ConsistentRead: true }));
   if (r.Item) throw new UserError("ProfileDeleted", "This Profile has been deleted.");
 }
 

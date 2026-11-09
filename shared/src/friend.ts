@@ -13,6 +13,12 @@ export const MAX_FRIENDS = 3;
 export const FRIEND_REQUESTS_PER_WINDOW = 10;
 export const FRIEND_REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Friend requests a Profile may have waiting at once (ticket 12, a record cap): requests never expire, so without
+ * it 10 a day would pile up forever. With at most 3 Friends, more than 5 waiting is never needed.
+ */
+export const MAX_PENDING_SENT = 5;
+
 const N = FRIEND_CODE_ALPHABET.length;
 /** Bytes at or above this would make the first characters likelier; they're skipped. */
 const UNBIASED_BELOW = 256 - (256 % N);
