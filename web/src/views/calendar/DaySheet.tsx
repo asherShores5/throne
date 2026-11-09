@@ -10,11 +10,8 @@ import type { ShownLog } from "../../sync/pending";
 import { LogEditor } from "../log/LogEditor";
 import { LogList } from "../log/LogList";
 import { Responses, type Directory } from "../log/Responses";
+import { longDay } from "../dayLabels";
 import "../log/log.css";
-
-/** e.g. "Sunday, November 8" (the Day as written, not shifted by any zone). */
-export const longDay = (day: string) =>
-  new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", weekday: "long", month: "long", day: "numeric" });
 
 export interface DayGroup {
   id: string;
