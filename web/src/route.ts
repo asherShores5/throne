@@ -1,5 +1,5 @@
 // The few screens Throne has, by URL path (CloudFront and the service worker serve index.html for any
-// page path). "/" home, "/settings", "/invite#<token>" (an Invite link; the token never leaves the browser).
+// page path). "/" home (Log tab), "/calendar" (Calendar tab), "/settings", "/invite#<token>" (an Invite link; the token never leaves the browser).
 import { useSyncExternalStore } from "react";
 
 const CHANGE = "throne:navigate";

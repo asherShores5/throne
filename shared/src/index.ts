@@ -2,5 +2,6 @@
 export * from "./profile";
 export * from "./invite";
 export * from "./log";
+export * from "./calendar";
 export * from "./signUp";
 export * from "./friend";

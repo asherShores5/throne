@@ -50,7 +50,7 @@ code and UI.
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
   new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
-  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -78,12 +78,12 @@ code and UI.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
   `route.ts` (paths `/`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
-  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `PersonCalendar` (one person's month from an injected `loadLogs(from, to)`, so ticket 07 can show a Friend read-only), `MonthGrid` (cell content from a `day()` callback, for the combined grid), `DaySheet`, `refresh.ts` (focus + pull-to-refresh)). Home has two tabs: `/` Log and `/calendar` Calendar. `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
