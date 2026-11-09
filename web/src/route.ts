@@ -1,5 +1,5 @@
 // The few screens Throne has, by URL path (CloudFront and the service worker serve index.html for any
-// page path). "/" home (Log tab), "/calendar" (Calendar tab), "/friends" (Friends tab), "/settings", "/invite#<token>"; a push opens "/calendar?who=<sub>&day=<Day>" (deepLink.ts) (an Invite link; the token never leaves the browser).
+// page path). "/" home (Log tab), "/calendar" (Calendar tab), "/friends" (Friends tab), "/settings", "/summary" (the weekly Summary, ticket 10), "/invite#<token>"; a push opens "/calendar?who=<sub>&day=<Day>" (deepLink.ts) (an Invite link; the token never leaves the browser).
 import { useSyncExternalStore } from "react";
 
 const CHANGE = "throne:navigate";

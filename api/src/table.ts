@@ -3,6 +3,8 @@
 //   PROFILE#<sub> / INVITESLOT#<1-3>   one of the Profile's 3 Invite places: { token } of the Invite in it
 // Later tickets add their items under the same partition (Logs: resolvers/log.ts; Friend code, Friend
 // requests, Friendships: resolvers/friend.ts, which also owns the FRIENDCODE#<code> lookup items).
+// The Profile directory, so the Notifier's hourly run can find every Profile without a Scan (ticket 10):
+//   PROFILES / PROFILE#<sub>           one per Profile, written with the Profile record (ticket 11 deletes it too)
 // Lookup items, found by a secret rather than by Profile:
 //   INVITE#<token> / INVITE            the Invite: creator, createdAt, expiresAt, status open|used|revoked
 //                                       (the pre-sign-up trigger only has the token)
@@ -16,6 +18,8 @@ export const TABLE = process.env.TABLE_NAME!;
 
 export const profilePk = (sub: string) => `PROFILE#${sub}`;
 export const PROFILE_SK = "PROFILE";
+export const DIRECTORY_PK = "PROFILES";
+export const directoryKey = (sub: string) => ({ PK: DIRECTORY_PK, SK: profilePk(sub) });
 export const inviteKey = (token: string) => ({ PK: `INVITE#${token}`, SK: "INVITE" });
 export const INVITE_SLOT_PREFIX = "INVITESLOT#";
 

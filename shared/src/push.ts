@@ -144,6 +144,13 @@ export function parsePushEvent(e: unknown): PushEvent | undefined {
   }
 }
 
+/** What the hourly schedule (infra/lib/stacks.ts) invokes the Notifier with: the weekly Summary run. */
+export const SCHEDULED_RUN = Object.freeze({ run: "summary" });
+
+/** True for the hourly schedule's event (anything else that isn't a PushEvent is ignored). */
+export const isScheduledRun = (e: unknown): boolean =>
+  typeof e === "object" && e !== null && (e as { run?: unknown }).run === SCHEDULED_RUN.run;
+
 // ---- payloads ---------------------------------------------------------------
 
 /** Where a tap goes (web/src/deepLink.ts opens it). */
@@ -181,4 +188,9 @@ export function eventPushPayload(e: PushEvent, fromName: string): PushPayload {
     case "friendLogged":
       return p(`${fromName} logged`, pushLinks.day(e.day, e.from));
   }
+}
+
+/** The weekly Summary push: no counts or names (it can show on a lock screen), just a way in. */
+export function summaryPushPayload(): PushPayload {
+  return { title: TITLE, body: "Last week's Summary is ready", data: { kind: "summary", url: pushLinks.summary } };
 }

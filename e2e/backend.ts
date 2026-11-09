@@ -175,3 +175,15 @@ export async function cognito(target: string, body: any): Promise<{ status: numb
       return fail("NotImplemented", `fake Cognito has no ${target}`);
   }
 }
+
+// ---- the Notifier's hourly run (ticket 10) ---------------------------------
+
+const notifier = await import("../api/src/notifier");
+// No real push service: a check that runs the schedule only looks at the stored Summaries.
+notifier.setPushSender(async () => {});
+
+/** Run the hourly schedule (the weekly Summary) as if it were `at`. Leaves the server clock there. */
+export async function runSchedule(at: string) {
+  setServerClock(at);
+  return notifier.handler({ run: "summary" });
+}

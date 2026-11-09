@@ -2,7 +2,8 @@
 //   - an event push: the API invokes it asynchronously after a write commits (api/src/events.ts) with a
 //     shared PushEvent (ids only). It re-checks the facts (the Friendship or the request still there), picks
 //     the recipients by their preferences, and sends "<name> did X" to each of their devices.
-//   - ticket 10: the hourly Summary (EventBridge Scheduler) goes in runScheduled() below.
+//   - the hourly run (EventBridge Scheduler, no event; ticket 10): builds each Profile's weekly Summary at
+//     Monday 08:00 in their Home zone and pushes it (runScheduled() below).
 // Sending, for both: one push per device; a device the push service says is gone (404/410) is deleted.
 //
 // It is the only principal that reads the VAPID private key (SSM); the API Lambda has no SSM access.
@@ -10,12 +11,18 @@
 // Health data: it never reads Details; push text comes from shared eventPushPayload (who + what only).
 import { createHash } from "node:crypto";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
-import { DeleteCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import webpush from "web-push";
-import { eventPushPayload, parsePushEvent, type PushEvent, type PushPayload, type PushToggles } from "@throne/shared";
-import { TABLE, ddb, isConditionFailed, profilePk } from "./table";
+import {
+  dueSummaryWeek, eventPushPayload, homeZoneOr, isScheduledRun, parsePushEvent, readPushPrefs, summaryPushPayload,
+  type PushEvent, type PushPayload, type PushToggles,
+} from "@throne/shared";
+import { now } from "./clock";
+import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "./table";
 import { followersOf, hasFriendRequest, isFriend, profileCard } from "./resolvers/friend";
+import { profileIds } from "./resolvers/profile";
 import { PUSH_PREFIX, pushToggles } from "./resolvers/push";
+import { buildSummary, claimSummary, hasSummary, type LogCache } from "./resolvers/summary";
 
 export { setDocClient } from "./table";
 
@@ -99,6 +106,8 @@ export interface RunSummary {
   sent: number;
   failed: number;
   pruned: number;
+  /** Summaries stored by this run (scheduled runs only). */
+  summaries?: number;
 }
 
 const empty = (): RunSummary => ({ sent: 0, failed: 0, pruned: 0 });
@@ -172,21 +181,44 @@ export async function sendEventPush(e: PushEvent): Promise<RunSummary> {
 
 // ---- scheduled runs (ticket 10) --------------------------------------------
 
+/** The Summary push lasts a day undelivered; a newer one replaces an older (a phone off all week). */
+const SUMMARY_PUSH: SendOptions = { TTL: 24 * 3600, urgency: "normal", topic: "summary" };
+
 /**
- * Ticket 10 builds the weekly Summary here: an hourly schedule invokes the Notifier with no event; for each
- * Profile whose Home zone just passed Monday 08:00 it stores the Summary and, with `summary` on, pushes it
- * (shared pushLinks.summary) through deliver(). Nothing yet.
+ * The hourly run: for each Profile (the directory) whose Home zone is past 08:00 on a Monday, build last
+ * week's Summary (shared dueSummaryWeek), store it with a conditional write, and only if this run's write
+ * landed, push it to the Profile's devices when their Summary push is on. Claim before send: a repeated
+ * or overlapping run finds the Summary there and does nothing; a crash between store and push loses
+ * that one push. One Profile failing doesn't stop the rest.
  */
 async function runScheduled(): Promise<RunSummary> {
-  return empty();
+  const summary = { ...empty(), summaries: 0 };
+  const t = now();
+  const cache: LogCache = new Map();
+  for (const sub of await profileIds()) {
+    try {
+      const p = (await ddb().send(new GetCommand({ TableName: TABLE, Key: { PK: profilePk(sub), SK: PROFILE_SK } }))).Item;
+      if (!p) continue;
+      const week = dueSummaryWeek(t, homeZoneOr(p.homeZone));
+      if (!week || (await hasSummary(sub, week.weekStart))) continue;
+      if (!(await claimSummary(sub, await buildSummary(sub, week, cache)))) continue;
+      summary.summaries++;
+      if (readPushPrefs(p.pushPrefs).summary) await deliver(sub, summaryPushPayload(), SUMMARY_PUSH, summary);
+    } catch (e) {
+      // No ids, no numbers: just that one Profile's Summary failed (the next hourly run that Monday retries).
+      console.error("summary failed", (e as Error)?.name);
+    }
+  }
+  return summary;
 }
 
 // ---- entry -----------------------------------------------------------------
 
 export async function handler(event: unknown): Promise<RunSummary> {
   const e = parsePushEvent(event);
-  const summary = e ? await sendEventPush(e) : await runScheduled();
+  const scheduled = !e && isScheduledRun(event);
+  const summary = e ? await sendEventPush(e) : scheduled ? await runScheduled() : empty();
   // Counts only: never who, never what.
-  console.log(JSON.stringify({ msg: "notifier run", kind: e?.kind ?? "scheduled", ...summary }));
+  console.log(JSON.stringify({ msg: "notifier run", kind: e?.kind ?? (scheduled ? "scheduled" : "ignored"), ...summary }));
   return summary;
 }

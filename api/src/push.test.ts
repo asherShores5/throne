@@ -232,6 +232,9 @@ describe("the Notifier", () => {
   it("ignores anything that isn't a known event", async () => {
     expect(await h.notify({ kind: "friendLogged", from: h.A.sub })).toEqual({ sent: 0, failed: 0, pruned: 0 });
     expect(await h.notify("junk")).toEqual({ sent: 0, failed: 0, pruned: 0 });
+    // Not the hourly schedule's event either, so no Summary run (it's Monday 10:00 in LA here).
+    expect(await h.notify({})).toEqual({ sent: 0, failed: 0, pruned: 0 });
+    expect(await h.call(h.A, "summaries")).toEqual([]);
   });
 
   it("a failed hand-off to the Notifier doesn't fail the write", async () => {

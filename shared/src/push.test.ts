@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_PUSH_PREFS, PUSH_DEVICES_MAX, eventPushPayload, parsePushEvent, parsePushPrefsInput, parsePushSubscription, pushLinks, readPushPrefs,
+  DEFAULT_PUSH_PREFS, PUSH_DEVICES_MAX, SCHEDULED_RUN, eventPushPayload, isScheduledRun, parsePushEvent, summaryPushPayload, parsePushPrefsInput, parsePushSubscription, pushLinks, readPushPrefs,
 } from "./push";
 
 const KEYS = { p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM", auth: "tBHItJI5svbpez7KI4CCXg" };
@@ -92,5 +92,17 @@ describe("push text", () => {
     expect(pushLinks.day("2026-11-09", "a b")).toBe("/calendar?who=a%20b&day=2026-11-09");
     expect(pushLinks.friends).toBe("/friends");
     expect(pushLinks.summary).toBe("/summary");
+  });
+
+  it("the hourly schedule's event is told apart from junk", () => {
+    expect(isScheduledRun(SCHEDULED_RUN)).toBe(true);
+    expect(isScheduledRun(JSON.parse(JSON.stringify(SCHEDULED_RUN)))).toBe(true);
+    for (const e of [{}, null, "summary", { run: "other" }, { kind: "friendLogged" }]) expect(isScheduledRun(e)).toBe(false);
+  });
+
+  it("the Summary push says only that it's ready (no counts, no names) and opens the Summary", () => {
+    expect(summaryPushPayload()).toEqual({
+      title: "Throne", body: "Last week's Summary is ready", data: { kind: "summary", url: "/summary" },
+    });
   });
 });

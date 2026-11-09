@@ -2,7 +2,8 @@ import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";
 import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
-import { LOG as WEB_LOG } from "../../web/src/api/selections";
+import { SCHEDULED_RUN } from "../../shared/src/push";
+import { LOG as WEB_LOG, SUMMARY as WEB_SUMMARY } from "../../web/src/api/selections";
 import { buildApp } from "../lib/app";
 
 // One synth for the whole file: bundling the API Lambda with esbuild is the slow part.
@@ -133,6 +134,8 @@ describe("API", () => {
     expect(queryDepth("query Me($z: String) { me(homeZone: $z) { id displayName homeZone avatar { emoji color } } }")).toBe(QUERY_DEPTH_LIMIT);
     // The Log selection (web/src/api/log.ts LOG) with its Reactions and Comments is just as deep.
     expect(queryDepth(`query { myLogs(from: "a", to: "b") { ${WEB_LOG} } }`)).toBe(QUERY_DEPTH_LIMIT);
+    // The Summary selection (web/src/api/selections.ts SUMMARY) fits too: the Avatar is flat on SummaryPerson.
+    expect(queryDepth(`query { summaries { ${WEB_SUMMARY} } }`)).toBeLessThanOrEqual(QUERY_DEPTH_LIMIT);
   });
 
   it("has a Lambda resolver for every Query and Mutation field in schema/", () => {
@@ -167,11 +170,11 @@ describe("push (least privilege)", () => {
     "Fn::Join": ["", ["arn:aws:ssm:us-west-1:", { Ref: "AWS::AccountId" }, `:parameter/throne/vapid/${name}`]],
   });
 
-  it("the Notifier reads the VAPID keys and reads/prunes the table, nothing more", () => {
+  it("the Notifier reads the VAPID keys, reads/prunes the table and stores Summaries (PutItem), nothing more", () => {
     const sts = statementsOf(roleOf(fnId("NotifierFn")));
     const ddb = sts.filter((st: any) => actions(st).some((a) => a.startsWith("dynamodb:")));
     expect(ddb).toHaveLength(1);
-    expect(actions(ddb[0]).sort()).toEqual(["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:Query"]);
+    expect(actions(ddb[0]).sort()).toEqual(["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]);
     expect(ddb[0].Resource).toEqual(tableArn());
     const ssm = sts.filter((st: any) => actions(st).some((a) => a.startsWith("ssm:")));
     expect(ssm).toEqual([expect.objectContaining({ Action: "ssm:GetParameter", Effect: "Allow" })]);
@@ -217,6 +220,22 @@ describe("push (least privilege)", () => {
     const perms = Object.values(app.findResources("AWS::Lambda::Permission")).filter((p: any) =>
       JSON.stringify(p.Properties.FunctionName).includes(fnId("NotifierFn")));
     expect(perms).toEqual([]);
+  });
+
+  it("an hourly schedule (minute 0, UTC) runs the weekly Summary, never retried, with a role that can only invoke the Notifier", () => {
+    const schedules = Object.values(app.findResources("AWS::Scheduler::Schedule")) as any[];
+    expect(schedules).toHaveLength(1);
+    const [s] = schedules;
+    expect(s.Properties.ScheduleExpression).toBe("cron(0 * * * ? *)");
+    expect(s.Properties.State).toBe("ENABLED");
+    expect(s.Properties.Target.Arn).toEqual({ "Fn::GetAtt": [fnId("NotifierFn"), "Arn"] });
+    expect(s.Properties.Target.RetryPolicy.MaximumRetryAttempts).toBe(0);
+    expect(JSON.parse(s.Properties.Target.Input)).toEqual(SCHEDULED_RUN);
+    const roleId = s.Properties.Target.RoleArn["Fn::GetAtt"][0];
+    const sts = statementsOf(roleId);
+    expect(sts.flatMap(actions)).toEqual(["lambda:InvokeFunction"]);
+    const notifierArn = { "Fn::GetAtt": [fnId("NotifierFn"), "Arn"] };
+    expect(sts.flatMap((st: any) => [st.Resource].flat())).toEqual([notifierArn, { "Fn::Join": ["", [notifierArn, ":*"]] }]);
   });
 });
 

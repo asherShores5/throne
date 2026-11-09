@@ -1,0 +1,42 @@
+# The weekly Summary (ticket 10). Resolvers: api/src/resolvers/summary.ts; math: shared/src/summary.ts.
+# Built by the Notifier's hourly run at Monday 08:00 in the Profile's Home zone, for last Monday-Sunday.
+# Plain comments, not "descriptions": AppSync has rejected described types before.
+
+# One person's line: the recipient (me: true, always first) or one of their Friends at the time.
+# Display name and Avatar are as they were when the Summary was built. The Avatar is flat (emoji, color)
+# so the selection stays within the query depth limit.
+type SummaryPerson {
+  id: ID!
+  me: Boolean!
+  displayName: String!
+  emoji: String!
+  color: String!
+  # Logs on the week's Days (each person's own Days).
+  total: Int!
+  # total / 7, to two places.
+  dailyAverage: Float!
+  # total minus the week before's total.
+  change: Int!
+  # The most common Bristol type of the week's Logs; null if none had one.
+  bristolType: Int
+}
+
+# mostRegular, earlyBird, nightOwl or streak; more than one winner on a tie.
+type SummaryAward {
+  award: String!
+  winners: [ID!]!
+}
+
+type Summary {
+  # The Monday and Sunday of the week (YYYY-MM-DD).
+  weekStart: String!
+  weekEnd: String!
+  people: [SummaryPerson!]!
+  # Only the Awards someone earned, in a fixed order.
+  awards: [SummaryAward!]!
+}
+
+extend type Query {
+  # The caller's own Summaries, newest first (at most 104, two years).
+  summaries: [Summary!]!
+}
