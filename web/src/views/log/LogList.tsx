@@ -1,5 +1,6 @@
-// A list of Logs grouped by Day, newest first, with time (in each Log's zone), Details, and edit/delete.
-import { useState } from "react";
+// A list of Logs grouped by Day, newest first, with time (in each Log's zone), Details, and edit/delete,
+// plus whatever `below` puts under each (Reactions and Comments).
+import { useState, type ReactNode } from "react";
 import { BRISTOL_TYPES, addDays, localTime } from "@throne/shared";
 import type { Log } from "../../api/log";
 import type { ShownLog } from "../../sync/pending";
@@ -13,7 +14,7 @@ export function dayLabel(day: string, today: string): string {
   return new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
 }
 
-export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, canDelete = () => true, oldestFirst = false }: {
+export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, canDelete = () => true, oldestFirst = false, below }: {
   logs: ShownLog[];
   today: string;
   onEdit: (l: Log) => void;
@@ -24,6 +25,8 @@ export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, c
   canDelete?: (l: Log) => boolean;
   /** Logs within a Day in time order (the Day sheet) instead of newest first (the recent list). */
   oldestFirst?: boolean;
+  /** Under each Log, full width (its Reactions and Comments). */
+  below?: (l: ShownLog) => ReactNode;
 }) {
   const [confirming, setConfirming] = useState<string>();
   const days = [...new Set(logs.map((l) => l.day))].sort().reverse();
@@ -59,6 +62,7 @@ export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, c
                       {canDelete(l) && <button type="button" className="link" aria-label={`Delete Log at ${time}`} onClick={() => setConfirming(l.id)}>Delete</button>}
                     </span>
                   )}
+                  {below?.(l)}
                 </li>
               );
             })}

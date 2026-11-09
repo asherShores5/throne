@@ -55,7 +55,7 @@ export function Home({ view = "log" }: { view?: HomeView }) {
       ) : (
         <section aria-label="Home" className="empty-home">
           <p>Hi, {me.displayName}.</p>
-          <LogPanel homeZone={me.homeZone} />
+          <LogPanel homeZone={me.homeZone} meId={me.id} />
         </section>
       )}
       <button type="button" className="link sign-out" onClick={() => void signOut()}>Sign out</button>

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { monthRange } from "@throne/shared";
 import { NetworkError } from "../../api/errors";
 import { errorText, friendLogs, type Log } from "../../api/log";
-import { refreshLogs, useLogs } from "../../sync/logs";
+import { gotLog, refreshLogs, useLogs } from "../../sync/logs";
 import type { ShownLog } from "../../sync/pending";
 
 /** Whose Logs: `me`, or a Friend by their Profile id. */
@@ -20,6 +20,8 @@ export interface MonthLogs {
   loading: boolean;
   error?: string;
   reload: () => void;
+  /** Swap in the server's newer copy of one Log (after a Reaction or Comment change). */
+  replace: (person: Whose, log: Log) => void;
 }
 
 export function useMonthLogs(month: string, people: readonly Whose[]): MonthLogs {
@@ -68,5 +70,9 @@ export function useMonthLogs(month: string, people: readonly Whose[]): MonthLogs
     const all = p.me ? mine : theirs[p.id] ?? [];
     logs[p.id] = all.filter((l) => l.day >= from && l.day <= to);
   }
-  return { logs, loading, error, reload };
+  const replace = useCallback((person: Whose, log: Log) => {
+    if (person.me) return gotLog(log);
+    setTheirs((old) => (old[person.id] ? { ...old, [person.id]: old[person.id].map((l) => (l.id === log.id ? log : l)) } : old));
+  }, []);
+  return { logs, loading, error, reload, replace };
 }

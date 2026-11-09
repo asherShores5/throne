@@ -25,7 +25,10 @@ export interface LogInput extends Partial<Details> {
 
 /** GraphQL drops nulls into the Log as `null`; the shared type uses "absent". */
 export function clean(l: Log): Log {
-  const out = { reactions: [], comments: [], ...l } as Record<string, unknown>;
+  const out = { ...l } as Record<string, unknown>;
+  // A Log saved on the device before Reactions existed has none.
+  out.reactions ??= [];
+  out.comments ??= [];
   for (const k of ["duration", "bristolType", "note"]) if (out[k] == null) delete out[k];
   return out as unknown as Log;
 }

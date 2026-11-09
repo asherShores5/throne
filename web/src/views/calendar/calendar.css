@@ -72,3 +72,10 @@
 .legend .who { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .day-sheet .day-group { display: flex; align-items: center; gap: 0.4rem; margin: 0.5rem 0 0; font-size: 1rem; }
 .day-sheet .day-whose { margin: 0 0 0.5rem; }
+
+/* A Day with Reactions or Comments the viewer can see (MonthGrid `marker`). */
+.month-grid .day button { position: relative; }
+.month-grid .day .marker {
+  position: absolute; top: 0.2rem; right: 0.25rem; font-size: 0.6rem; line-height: 1;
+  width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--text); box-shadow: 0 0 0 1.5px var(--surface);
+}
