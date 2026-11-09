@@ -4,10 +4,11 @@
 //   beforeEach(() => h.reset());
 //   const me = await h.call(h.A, "me", { homeZone: "America/Los_Angeles" });
 //   await expect(h.call(h.B, "someField", {})).rejects.toThrow("NotFound: ...");
+//   await h.signUp(inviteToken, "newbie");      // the Cognito pre-sign-up trigger (preSignUp.ts)
 //
-// handler.ts reads TABLE_NAME at import time, so tests must import the handler through this module
+// handler.ts and preSignUp.ts read TABLE_NAME at import time, so tests must import the handler through this module
 // (never statically) for the env below to take effect.
-import type { AppSyncIdentityCognito, AppSyncResolverEvent } from "aws-lambda";
+import type { AppSyncIdentityCognito, AppSyncResolverEvent, PreSignUpTriggerEvent } from "aws-lambda";
 import { FakeDocClient } from "./fakeDynamo";
 
 /** A signed-in Cognito user, as AppSync sees them. The sub is what identifies a Profile. */
@@ -24,6 +25,32 @@ process.env.TABLE_NAME = process.env.TABLE_NAME ?? "test-table";
 
 const { handler, setDocClient } = await import("../handler");
 const { QUERY_FIELDS } = await import("../resolvers");
+const { handler: preSignUp } = await import("../preSignUp");
+
+export interface SignUpOptions {
+  /** Where the web app put the token: ClientMetadata (what it sends) or ValidationData. */
+  via?: "clientMetadata" | "validationData";
+  /** Which Cognito path ran the trigger (SignUp from the app by default). */
+  triggerSource?: PreSignUpTriggerEvent["triggerSource"];
+}
+
+/** The Cognito pre-sign-up trigger event for a SignUp call with this Invite token and username. */
+export function preSignUpEvent(token: string | undefined, username: string, opts: SignUpOptions = {}): PreSignUpTriggerEvent {
+  const meta = token === undefined ? undefined : { inviteToken: token };
+  return {
+    version: "1",
+    region: "us-west-1",
+    userPoolId: "us-west-1_test",
+    userName: username,
+    callerContext: { awsSdkVersion: "test", clientId: "test-client" },
+    triggerSource: opts.triggerSource ?? "PreSignUp_SignUp",
+    request: {
+      userAttributes: {},
+      ...(opts.via === "validationData" ? { validationData: meta } : { clientMetadata: meta }),
+    },
+    response: { autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false },
+  };
+}
 
 const db = new FakeDocClient();
 setDocClient(db);
@@ -58,5 +85,7 @@ export function harness() {
     call: (who: Caller, fieldName: string, args: Record<string, unknown> = {}): Promise<any> => handler(appSyncEvent(who, fieldName, args)),
     /** Invoke the handler with a raw event (e.g. no identity at all). */
     raw: (event: AppSyncResolverEvent<Record<string, unknown>>): Promise<any> => handler(event),
+    /** Run the Cognito pre-sign-up trigger for a SignUp with this Invite token. Rejects as Cognito would see it. */
+    signUp: (token: string | undefined, username: string, opts?: SignUpOptions) => preSignUp(preSignUpEvent(token, username, opts)),
   };
 }

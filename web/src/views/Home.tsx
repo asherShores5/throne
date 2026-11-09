@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { signOut } from "../auth";
 import type { Profile } from "../api/profile";
+import { onLink } from "../route";
 import { loadMeCached } from "../sync/profileCache";
+import "./profile.css";
 import { LogPanel } from "./log/LogPanel";
 
 /**
@@ -21,9 +23,11 @@ export function Home() {
       <header className="topbar">
         <h1>Throne</h1>
         {me && (
-          <span className="avatar" style={{ background: me.avatar.color }} role="img" aria-label={`${me.displayName}'s Avatar`}>
-            {me.avatar.emoji}
-          </span>
+          <a href="/settings" onClick={onLink("/settings")} aria-label="Settings" className="avatar-link">
+            <span className="avatar" style={{ background: me.avatar.color }} role="img" aria-label={`${me.displayName}'s Avatar`}>
+              {me.avatar.emoji}
+            </span>
+          </a>
         )}
       </header>
       {error && <p className="error" role="alert">{error}</p>}

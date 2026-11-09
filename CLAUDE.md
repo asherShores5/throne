@@ -49,7 +49,8 @@ code and UI.
 ## Layout (built so tickets can work in parallel)
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
-  new-Profile defaults; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -58,7 +59,10 @@ code and UI.
 - `api/src/`: `handler.ts` (caller = Cognito `sub`, then dispatch by field name), `table.ts` (key layout,
   document client seam), `resolvers/<entity>.ts` (one `ResolverModule` per entity, merged in
   `resolvers/index.ts`). `resolvers/profile.ts` has `ensureProfile(ctx, zone)`, which later resolvers can
-  call to get the caller's Profile. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
+  call to get the caller's Profile (it also moves the Home zone with the device unless the Profile pinned one;
+  `updateProfile` edits it). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
+  Profile (`INVITESLOT#1-3`, claimed in a transaction, so the cap holds under races). `preSignUp.ts`: the Cognito
+  pre-sign-up trigger (its own Lambda) that spends an open Invite with one conditional write. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
   Profile is one key range, `myLogs(from, to)`), plus `LOGID#<id>` (id lookup + idempotent create) and
   `LOGDAY#<Day>` (count for the 50-a-Day cap), always written together in one transaction. `clock.ts`: server
   time for the time rules (seam for e2e).
@@ -73,12 +77,13 @@ code and UI.
   table only (asserted in `infra/test/stacks.test.ts`).
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
-  `views/` (`Login`, `Home`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet). `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  `route.ts` (paths `/`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet). `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `offline.ts`).
+  (`smoke.ts`, `log.ts`, `invites.ts`, `offline.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -91,8 +96,11 @@ code and UI.
   a deeper one raises it and updates the pinned test in `infra/test/stacks.test.ts`; e2e refuses deeper queries.
 - **The handler reads env at import time**: tests and e2e import it through `api/src/testing/harness.ts` /
   `e2e/backend.ts`, which set the env first. Never import it statically in a test.
-- **Self sign-up is off** until ticket 02 adds the Invite pre-sign-up trigger; turning it on without that
-  trigger would let anyone make an account.
+- **Self sign-up is on only because of the Invite pre-sign-up trigger** (`api/src/preSignUp.ts`); never remove
+  or weaken the trigger while self sign-up is on (one test in `infra/test/stacks.test.ts` asserts both). The
+  trigger gets only `TABLE_NAME` and `UpdateItem` (a pool ID in its env would be a circular dependency).
+  Visitors can't call the API, so the Invite landing page only learns a link is spent when sign-up is refused.
+  It checks the form before calling SignUp, because a refused SignUp may still have spent the Invite.
 - **Log writes go through `web/src/sync/logs.ts`** (`logNow`/`editLog`/`removeLog`/`useLogs`), never straight
   to `api/log.ts`, or they won't work offline or show as pending. The server's answer to a queued write comes
   later, so rules a form can check (Details, time) are checked before queueing (`views/log/form.ts`); only

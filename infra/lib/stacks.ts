@@ -50,14 +50,35 @@ export class AppStack extends Stack {
     // ---- auth ----
     // ESSENTIALS allows the USER_AUTH (choice-based) flow: a password once, then a passkey (Face ID
     // on iPhone; iCloud Keychain or phone QR on desktop). The password stays as the backup.
-    // Self sign-up stays off until ticket 02 adds the pre-sign-up trigger that requires an Invite.
+    // Self sign-up is on ONLY because the pre-sign-up trigger below refuses any sign-up without an open
+    // Invite (api/src/preSignUp.ts; asserted together in infra/test/stacks.test.ts). Never one without the other.
+    // The trigger gets only TABLE_NAME: a user-pool ID in its env would be a circular dependency.
+    const preSignUp = new nodejs.NodejsFunction(this, "PreSignUpFn", {
+      entry: path.join(ROOT, "api", "src", "preSignUp.ts"),
+      projectRoot: ROOT,
+      depsLockFilePath: path.join(ROOT, "package-lock.json"),
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      // Cognito waits at most 5 seconds for a trigger.
+      timeout: Duration.seconds(5),
+      environment: { TABLE_NAME: table.tableName },
+      bundling: { minify: true, sourceMap: true, format: nodejs.OutputFormat.ESM, target: "node22" },
+      logGroup: new logs.LogGroup(this, "PreSignUpLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+    });
+    // Spending an Invite is one conditional UpdateItem; it reads and writes nothing else.
+    table.grant(preSignUp, "dynamodb:UpdateItem");
+
     const userPool = (this.userPool = new cognito.UserPool(this, "Users", {
       userPoolName: "throne",
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       signInPolicy: { allowedFirstAuthFactors: { password: true, passkey: true } },
       passkeyRelyingPartyId: APP_DOMAIN,
       passkeyUserVerification: cognito.PasskeyUserVerification.REQUIRED,
-      selfSignUpEnabled: false,
+      selfSignUpEnabled: true,
+      lambdaTriggers: { preSignUp },
+      // No email or phone to confirm: the trigger auto-confirms a sign-up that spent an Invite.
+      autoVerify: { email: false, phone: false },
       signInAliases: { username: true },
       signInCaseSensitive: false,
       passwordPolicy: { minLength: 16, requireLowercase: true, requireUppercase: true, requireDigits: true, requireSymbols: false },

@@ -14,10 +14,31 @@ type Profile {
   avatar: Avatar!
   # IANA time zone name, e.g. America/Los_Angeles.
   homeZone: String!
+  # True while the Home zone follows the device; false once the Profile picked one (ticket 02).
+  homeZoneAuto: Boolean!
+}
+
+input AvatarInput {
+  emoji: String!
+  color: String!
+}
+
+# Only the fields sent change. homeZoneAuto false pins homeZone (send it too); true follows the device.
+input ProfileInput {
+  displayName: String
+  avatar: AvatarInput
+  homeZone: String
+  homeZoneAuto: Boolean
 }
 
 extend type Query {
   # The caller's Profile. The first call by a new sign-in creates it (placeholder Display name,
   # default Avatar, Home zone from `homeZone`, the device's zone; UTC if that isn't a zone name).
+  # Later calls move the Home zone to `homeZone` while it follows the device.
   me(homeZone: String): Profile!
+}
+
+extend type Mutation {
+  # Edit the caller's Display name, Avatar or Home zone (ticket 02).
+  updateProfile(input: ProfileInput!): Profile!
 }
