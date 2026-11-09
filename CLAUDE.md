@@ -50,7 +50,7 @@ code and UI.
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
   new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
-  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `push.ts`: push prefs defaults/edits, the push-service endpoint allowlist + 10-device cap, the PushEvent the API hands the Notifier, push text (`eventPushPayload`, no Details) and tap links (`pushLinks`); `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -79,7 +79,15 @@ code and UI.
   `clearResponses` both ways (it runs even when the Friendship is already over, so a retry finishes a half-done
   cleanup). Each change is one transaction: Log Update conditioned on `rv`, the pointer, and a ConditionCheck on
   the author's `FRIEND#<owner>` item.
-- `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table) and
+  `resolvers/push.ts` (ticket 09): `pushPrefs` toggles on the Profile record (absent = Summary on, rest off),
+  "Friend logged" as `notifyLogs` on my `FRIEND#<other>` item (so ending a Friendship unfollows), devices at
+  `PUSH#<deviceId>`. `events.ts`: `emit(PushEvent)` after a write commits = async Lambda invoke of the Notifier
+  (ids only; never fails the write; no `NOTIFIER_FUNCTION` = no-op). `notifier.ts`: its own Lambda (CJS for
+  web-push): re-checks the Friendship/request, applies prefs, sends to every device, prunes 404/410;
+  `runScheduled()` is where ticket 10's hourly Summary goes. `vapid.ts` + `vapidKeysProvider.ts`: the VAPID
+  key custom resource (SSM `/throne/vapid/*`, never overwritten).
+- `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table; it also
+  captures push events, `h.deliver()` runs the real Notifier on them with a fake push service, `h.takePushes()`) and
   `fakeDynamo.ts` (in-memory document client: conditional writes, all-or-nothing transactions, and it
   refuses un-aliased attribute names and unused placeholders).
 - `infra/lib/`: `stacks.ts` (AppStack: table, Cognito, AppSync + Lambda, budget), `hosting.ts` (CertStack,
@@ -87,16 +95,21 @@ code and UI.
   `config.ts` (zone/account from context or env), `app.ts` (wires them; Cert/Web/Ci only with hosting
   config). An AppSync resolver is created for every Query/Mutation field in the composed schema, so a new
   field needs only its schema line and its resolver. The Lambda gets Get/Put/Update/Delete/Query on the
-  table only (asserted in `infra/test/stacks.test.ts`).
+  table and `lambda:InvokeFunction` on the Notifier only, no SSM (asserted in `infra/test/stacks.test.ts`). The
+  Notifier gets Get/Query/Delete on the table and `ssm:GetParameter` on the two VAPID parameters; its async
+  invokes are never retried. `config.json` gets `vapidPublicKey` from the VapidKeys resource.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
-  `route.ts` (paths `/`, `/calendar`, `/friends`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
+  `route.ts` (paths `/`, `/calendar` (also `?who=<sub>&day=<Day>` from a push), `/friends`, `/settings`, `/invite#<token>`; `useSearch`), `views/` (`Login`, `Home`, `Join` = Invite landing
   page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `Calendar` (the Avatar row: Me, each Friend, Everyone; shown once there's a Friend), `MonthCalendar` (one person's heat month, or the combined grid with a count per person in Avatar colors from shared `combinedColors`), `monthLogs.ts` (`useMonthLogs`: my Logs from the outbox store via `refreshLogs`/`useLogs`, so pending ones show; a Friend's via `friendLogs`, never cached; one range query per person), `MonthGrid` (cell content from a `day()` callback), `DaySheet` (one group per person; only my Logs editable; Reactions/Comments under each Log via `log/Responses.tsx`, online only, and a Day marker when there are some), `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
-  `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
+  `vite.config.ts`; it also shows pushes and opens their link (`src/deepLink.ts`: `notificationFor`, `clickPlan`,
+  the `navigate` message App.tsx follows; no imports, the worker build takes plain modules). Push glue:
+  `notifications.ts` (enable inside the click handler, disable, sign-out `releaseThisDevice`), pure `push.ts`,
+  `pushDevice.ts`, `timeout.ts` (from HoneyDo); `views/Notifications.tsx` is the Settings section. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`, `push.ts`; `open(u, { serviceWorkers: true, fakePush: true })` gives a stand-in push service); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -129,5 +142,8 @@ code and UI.
   fakes the page clock (`open(u, { clock })`) must also call `setServerClock` with the same start, or the
   server judges "future" and "7 days old" by the real clock. A Log's Day is fixed by its own Log zone; never
   re-bucket Logs by the current Home zone.
+- **Push text never carries Details, Comment text or Reaction emoji**: build it in shared `eventPushPayload`
+  from the event kind + a Display name only. Emit an event only after the write commits and only when
+  something changed (a retry or no-op emits nothing). The API Lambda must never get SSM access.
 - **Passkeys**: the relying party is `APP_DOMAIN` (`throne.ashershores.com`), so passkeys only work there,
   and changing it orphans every passkey.
