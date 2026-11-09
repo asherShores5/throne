@@ -41,7 +41,11 @@ async function mark(sub: string) {
   }
 }
 
-/** Delete every item in `sub`'s partition but the marker. */
+/**
+ * Delete every item in `sub`'s partition but the marker. Blind deletes of Log items, against the rv rule
+ * (log.ts sameResponses), on purpose: by now the DELETED marker refuses every call of theirs and every
+ * Friendship is gone, so no Reaction or Comment can land on these Logs, and their pointers were cleared above.
+ */
 async function sweep(sub: string) {
   const marker = deletedKey(sub).SK;
   for (;;) {

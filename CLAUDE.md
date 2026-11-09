@@ -162,6 +162,10 @@ code and UI.
   the deepest equals the cap, and that every root field is used by the app.
 - **Never write a Log item without the `rv` condition** (`sameResponses`/`unchangedSince` in `resolvers/log.ts`):
   a blind Put or Delete would wipe a Reaction or Comment that landed after the read (or leave its pointer).
+  The only exceptions, each commented where it happens: `createLog`'s Put (the `LOGID#` `attribute_not_exists` in
+  the same transaction guards it: a new Log has nothing on it yet), `updateLog`'s Put to the new SK when the
+  Log moves (the Delete of the old item in the same transaction carries the `rv` condition), and Delete
+  Profile's `sweep()` (the DELETED marker is down and no Friendship is left, so nothing can land).
 - **The handler reads env at import time**: tests and e2e import it through `api/src/testing/harness.ts` /
   `e2e/backend.ts`, which set the env first. Never import it statically in a test.
 - **Self sign-up is on only because of the Invite pre-sign-up trigger** (`api/src/preSignUp.ts`); never remove

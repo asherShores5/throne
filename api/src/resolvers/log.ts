@@ -170,6 +170,8 @@ async function createLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log>
       new TransactWriteCommand({
         TransactItems: [
           { Put: { TableName: TABLE, Item: { PK: pk, SK: idSk(id), sk }, ConditionExpression: "attribute_not_exists(#pk)", ExpressionAttributeNames: { "#pk": "PK" } } },
+          // No rv condition needed: the LOGID# Put above (attribute_not_exists) is the guard. If this id
+          // exists the whole transaction fails, so this Put only ever writes a Log nobody could react to yet.
           { Put: { TableName: TABLE, Item: rec } },
           countUp(pk, day),
         ],
@@ -218,6 +220,8 @@ async function updateLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log>
         new TransactWriteCommand({
           TransactItems: [
             { Delete: { TableName: TABLE, Key: { PK: pk, SK: old.SK }, ...unchanged } },
+            // No rv condition needed: the Delete above carries it (same transaction), and the new SK holds
+            // this Log's id, so nothing is there to overwrite; the Reactions/Comments read with `old` move over.
             { Put: { TableName: TABLE, Item: rec } },
             {
               Put: {
