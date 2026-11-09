@@ -80,6 +80,11 @@ export async function releaseThisDevice() {
       if (e instanceof NetworkError) queueDelete(localStorage, username, id);
     });
   }
+  await releaseLocally();
+}
+
+/** This device's part of sign-out (and of Delete Profile): unsubscribe and clear pushes on screen. Never throws. */
+export async function releaseLocally() {
   try {
     const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
     await (await reg?.pushManager.getSubscription())?.unsubscribe();

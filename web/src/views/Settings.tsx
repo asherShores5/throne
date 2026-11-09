@@ -1,6 +1,7 @@
 import "./profile.css";
 import { useEffect, useMemo, useState } from "react";
-import { DISPLAY_NAME_MAX, cleanDisplayName, type Avatar } from "@throne/shared";
+import { DELETE_CONFIRM_WORD, DISPLAY_NAME_MAX, cleanDisplayName, isDeleteConfirmed, type Avatar } from "@throne/shared";
+import { deleteMyProfile } from "../account";
 import { listPasskeys, registerPasskey } from "../auth";
 import { createInvite, linkFor, listInvites, revokeInvite, type Invite } from "../api/invite";
 import { deviceZone, loadMe, plainMessage, updateProfile, type Profile } from "../api/profile";
@@ -8,7 +9,7 @@ import { onLink } from "../route";
 import { AvatarPicker } from "./AvatarPicker";
 import { NotificationsSection } from "./Notifications";
 
-/** Settings (/settings): the Profile's Display name, Avatar and Home zone, notifications, passkeys, and Invites. */
+/** Settings (/settings): the Profile's Display name, Avatar and Home zone, notifications, passkeys, Invites, Delete Profile. */
 export function Settings() {
   const [me, setMe] = useState<Profile>();
   const [error, setError] = useState<string>();
@@ -40,6 +41,7 @@ export function Settings() {
           <NotificationsSection />
           <PasskeySection />
           <InviteSection />
+          <DeleteProfileSection />
         </>
       )}
     </main>
@@ -232,6 +234,56 @@ function InviteSection() {
       )}
       <button type="button" disabled={busy || !invites} onClick={() => void make()}>Make an Invite link</button>
       {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+/** Delete Profile (ticket 11): a deliberate second step where the word must be typed, then it's gone for good. */
+function DeleteProfileSection() {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function remove() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await deleteMyProfile(); // signs out: this screen goes away
+    } catch (err) {
+      setError(`${plainMessage(err)} Nothing more was deleted on this phone; try again.`);
+      setBusy(false);
+    }
+  }
+
+  function close() {
+    setOpen(false);
+    setTyped("");
+    setError(undefined);
+  }
+
+  return (
+    <section className="card danger-zone" aria-label="Delete Profile">
+      <h2>Delete Profile</h2>
+      <p className="hint">
+        Deletes your Profile for good: your Logs, Friendships, the Reactions and Comments you left, Invites, Summaries and
+        your sign-in. Your Friends stop seeing you. This can't be undone.
+      </p>
+      {!open ? (
+        <button type="button" className="danger" onClick={() => setOpen(true)}>Delete Profile…</button>
+      ) : (
+        <form className="confirm" role="group" aria-label="Confirm Delete Profile" onSubmit={(e) => { e.preventDefault(); if (isDeleteConfirmed(typed)) void remove(); }}>
+          <label>
+            Type “{DELETE_CONFIRM_WORD}” to confirm
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} disabled={busy} />
+          </label>
+          <span className="actions">
+            <button className="danger-fill" disabled={busy || !isDeleteConfirmed(typed)}>{busy ? "Deleting…" : "Delete my Profile"}</button>
+            <button type="button" disabled={busy} onClick={close}>Keep my Profile</button>
+          </span>
+          {error && <p className="error" role="alert">{error}</p>}
+        </form>
+      )}
     </section>
   );
 }

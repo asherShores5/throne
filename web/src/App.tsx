@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import "./account"; // finishes a Delete Profile that stopped half way, whatever screen is open
 import { isSignedIn, onAuthChange } from "./auth";
 import { loadConfig } from "./config";
 import { navigateMessage } from "./deepLink";

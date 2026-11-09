@@ -6,4 +6,4 @@ export class NetworkError extends Error {
 }
 
 /** The server's "<Type>: message" error, without the type, for showing to the Profile. */
-export const errorText = (e: unknown) => String((e as Error)?.message ?? e).replace(/^(ValidationError|NotFound|Forbidden|Unavailable): /, "");
+export const errorText = (e: unknown) => String((e as Error)?.message ?? e).replace(/^(ValidationError|NotFound|Forbidden|Unavailable|ProfileDeleted): /, "");
