@@ -15,6 +15,7 @@ import {
   visibleResponses, type Comment, type Details, type Reaction,
 } from "@throne/shared";
 import { now } from "../clock";
+import { emit } from "../events";
 import { UserError, invalid } from "../errors";
 import { TABLE, ddb, isConditionFailed, profilePk } from "../table";
 import { requireFriend } from "./friend";
@@ -173,7 +174,6 @@ async function createLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log>
         ],
       }),
     );
-    return out(rec, ctx.sub);
   } catch (e) {
     const failed = failedConditions(e);
     if (!failed) throw e;
@@ -185,6 +185,9 @@ async function createLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log>
     if (failed[2]) throw invalid(CAP_MESSAGE);
     throw e;
   }
+  // Friends who follow me get "<name> logged" (ids only; the Notifier never sees the Details).
+  await emit({ kind: "friendLogged", from: ctx.sub, logId: id, day });
+  return out(rec, ctx.sub);
 }
 
 async function updateLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log> {

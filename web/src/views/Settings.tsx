@@ -6,8 +6,9 @@ import { createInvite, linkFor, listInvites, revokeInvite, type Invite } from ".
 import { deviceZone, loadMe, plainMessage, updateProfile, type Profile } from "../api/profile";
 import { onLink } from "../route";
 import { AvatarPicker } from "./AvatarPicker";
+import { NotificationsSection } from "./Notifications";
 
-/** Settings (/settings): the Profile's Display name, Avatar and Home zone, passkeys, and Invites. */
+/** Settings (/settings): the Profile's Display name, Avatar and Home zone, notifications, passkeys, and Invites. */
 export function Settings() {
   const [me, setMe] = useState<Profile>();
   const [error, setError] = useState<string>();
@@ -36,6 +37,7 @@ export function Settings() {
           )}
           <ProfileSection me={me} onSaved={setMe} />
           <HomeZoneSection me={me} onSaved={setMe} />
+          <NotificationsSection />
           <PasskeySection />
           <InviteSection />
         </>

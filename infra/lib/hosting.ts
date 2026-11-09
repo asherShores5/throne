@@ -109,6 +109,8 @@ export class WebStack extends Stack {
           userPoolId: app.userPool.userPoolId,
           clientId: app.client.userPoolClientId,
           graphqlUrl: app.api.graphqlUrl,
+          // From the VapidKeys resource (a GetAtt), so the keys exist before the app can subscribe.
+          vapidPublicKey: app.vapidPublicKey,
         }),
       ],
       // Vite assets are content-hashed; no-cache just forces cheap revalidation of index/config/sw.

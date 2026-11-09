@@ -44,9 +44,9 @@ describe("data", () => {
     expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
   });
 
-  it("one Lambda handler for the API and one pre-sign-up trigger (plus CDK's own helpers, if any)", () => {
+  it("one Lambda handler for the API, one pre-sign-up trigger and the Notifier read the table (plus CDK helpers)", () => {
     const fns = Object.entries(app.findResources("AWS::Lambda::Function")).filter(([, f]) => f.Properties.Environment?.Variables?.TABLE_NAME);
-    expect(fns.map(([id]) => id.replace(/[0-9A-F]{8}$/, "")).sort()).toEqual(["ApiFn", "PreSignUpFn"]);
+    expect(fns.map(([id]) => id.replace(/[0-9A-F]{8}$/, "")).sort()).toEqual(["ApiFn", "NotifierFn", "PreSignUpFn"]);
     for (const [, f] of fns) {
       expect(f.Properties.Runtime).toBe("nodejs22.x");
       expect(f.Properties.Architectures).toEqual(["arm64"]);
@@ -146,6 +146,77 @@ describe("API", () => {
     app.hasResourceProperties("AWS::AppSync::GraphQLApi", {
       LogConfig: Match.objectLike({ FieldLogLevel: "ERROR", ExcludeVerboseContent: true }),
     });
+  });
+});
+
+describe("push (least privilege)", () => {
+  const fnId = (prefix: string) => {
+    const ids = Object.keys(app.findResources("AWS::Lambda::Function")).filter((id) => id.startsWith(prefix));
+    expect(ids).toHaveLength(1);
+    return ids[0];
+  };
+  const roleOf = (id: string) => app.findResources("AWS::Lambda::Function")[id].Properties.Role["Fn::GetAtt"][0] as string;
+  /** Every statement in the inline policies attached to this role. */
+  const statementsOf = (roleId: string) =>
+    Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement);
+  const actions = (st: any) => [st.Action].flat() as string[];
+  const tableArn = () => ({ "Fn::GetAtt": [Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"))[0], "Arn"] });
+  const vapidArn = (name: string) => ({
+    "Fn::Join": ["", ["arn:aws:ssm:us-west-1:", { Ref: "AWS::AccountId" }, `:parameter/throne/vapid/${name}`]],
+  });
+
+  it("the Notifier reads the VAPID keys and reads/prunes the table, nothing more", () => {
+    const sts = statementsOf(roleOf(fnId("NotifierFn")));
+    const ddb = sts.filter((st: any) => actions(st).some((a) => a.startsWith("dynamodb:")));
+    expect(ddb).toHaveLength(1);
+    expect(actions(ddb[0]).sort()).toEqual(["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:Query"]);
+    expect(ddb[0].Resource).toEqual(tableArn());
+    const ssm = sts.filter((st: any) => actions(st).some((a) => a.startsWith("ssm:")));
+    expect(ssm).toEqual([expect.objectContaining({ Action: "ssm:GetParameter", Effect: "Allow" })]);
+    expect(ssm[0].Resource).toEqual([vapidArn("private"), vapidArn("public")]);
+    expect(sts.flatMap(actions).filter((a: string) => !a.startsWith("dynamodb:") && !a.startsWith("ssm:"))).toEqual([]);
+  });
+
+  it("the API Lambda has no SSM access and may only invoke the Notifier", () => {
+    const fn = app.findResources("AWS::Lambda::Function")[fnId("ApiFn")];
+    const sts = statementsOf(roleOf(fnId("ApiFn")));
+    expect(sts.flatMap(actions).filter((a: string) => a.startsWith("ssm:") || a.startsWith("kms:"))).toEqual([]);
+    const invoke = sts.filter((st: any) => actions(st).some((a) => a.startsWith("lambda:")));
+    expect(invoke).toHaveLength(1);
+    expect(actions(invoke[0])).toEqual(["lambda:InvokeFunction"]);
+    const notifierArn = { "Fn::GetAtt": [fnId("NotifierFn"), "Arn"] };
+    expect([invoke[0].Resource].flat()).toEqual([notifierArn, { "Fn::Join": ["", [notifierArn, ":*"]] }]);
+    expect(fn.Properties.Environment.Variables.NOTIFIER_FUNCTION).toEqual({ Ref: fnId("NotifierFn") });
+    // Nothing secret reaches the API: no VAPID parameter names in its env.
+    expect(JSON.stringify(fn.Properties.Environment)).not.toMatch(/vapid/i);
+  });
+
+  it("only the Notifier and the VapidKeys function may touch the VAPID parameters", () => {
+    const readers = Object.entries(app.findResources("AWS::IAM::Policy"))
+      .filter(([, p]: any) => JSON.stringify(p.Properties.PolicyDocument).includes("ssm:"))
+      .map(([, p]: any) => JSON.stringify(p.Properties.Roles));
+    expect(readers).toHaveLength(2);
+    expect(readers.some((r) => r.includes(roleOf(fnId("NotifierFn"))))).toBe(true);
+    expect(readers.some((r) => r.includes(roleOf(fnId("VapidKeysFn"))))).toBe(true);
+    const vapidSts = statementsOf(roleOf(fnId("VapidKeysFn"))).filter((st: any) => actions(st).some((a) => a.startsWith("ssm:")));
+    expect(vapidSts.flatMap(actions).sort()).toEqual(["ssm:GetParameter", "ssm:PutParameter"]);
+    expect(vapidSts[0].Resource).toEqual([vapidArn("private"), vapidArn("public")]);
+    app.resourceCountIs("Custom::VapidKeys", 1);
+  });
+
+  it("an event push that fails is dropped, not retried (a retry could push twice)", () => {
+    app.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      FunctionName: { Ref: fnId("NotifierFn") },
+      MaximumRetryAttempts: 0,
+    });
+  });
+
+  it("nothing else may invoke the Notifier (no resource-based permission for any service)", () => {
+    const perms = Object.values(app.findResources("AWS::Lambda::Permission")).filter((p: any) =>
+      JSON.stringify(p.Properties.FunctionName).includes(fnId("NotifierFn")));
+    expect(perms).toEqual([]);
   });
 });
 

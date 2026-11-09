@@ -3,6 +3,8 @@ export interface Config {
   userPoolId: string;
   clientId: string;
   graphqlUrl: string;
+  /** Web Push VAPID public key (base64url). Missing until the push stack is deployed: push stays off. */
+  vapidPublicKey?: string;
 }
 
 let config: Config | undefined;

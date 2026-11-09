@@ -1,7 +1,8 @@
-// Service worker: offline app shell (copied from NutriSage). Built by the
+// Service worker: offline app shell (copied from NutriSage) and push notifications (ticket 09, from HoneyDo). Built by the
 // `serviceWorker` plugin in vite.config.ts into a single classic script at /sw.js, so it can import
 // pure modules from src/ without becoming an ES-module worker.
 /// <reference lib="webworker" />
+import { clickPlan, notificationFor } from "../src/deepLink";
 import { routeRequest, shellCacheName, staleCaches } from "../src/swShell";
 
 declare const self: ServiceWorkerGlobalScope;
@@ -59,6 +60,40 @@ async function shell(request: Request): Promise<Response> {
 async function precached(request: Request): Promise<Response> {
   const hit = await caches.open(CACHE).then((c) => c.match(request, { ignoreSearch: true }));
   return hit ?? fetch(request);
+}
+
+// ---- push (ticket 09) --------------------------------------------------------
+// Always show a notification, even for an empty or broken payload: iOS revokes the subscription of a
+// worker that receives a push and shows nothing. notificationFor never throws.
+self.addEventListener("push", (event) => {
+  let raw: string | undefined;
+  try {
+    raw = event.data?.text();
+  } catch {
+    raw = undefined;
+  }
+  const { title, options } = notificationFor(raw);
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// A tap opens the Day, Friend requests or the Summary: in the open app if there is one (App.tsx listens
+// for the message), else in a new window. clickPlan keeps it on this origin.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(openFromNotification(event.notification.data));
+});
+
+async function openFromNotification(data: unknown): Promise<void> {
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const plan = clickPlan(data, windows, self.location.origin);
+  if ("open" in plan) {
+    await self.clients.openWindow(plan.open);
+    return;
+  }
+  const win = windows[plan.focus];
+  // Post first: focus() can reject if the tap's activation has lapsed, and the app should still move.
+  win.postMessage(plan.message);
+  await win.focus().catch(() => undefined);
 }
 
 export {};

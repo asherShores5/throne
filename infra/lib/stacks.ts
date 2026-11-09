@@ -2,14 +2,16 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
-  CfnOutput, Duration, RemovalPolicy, Stack, type StackProps,
+  CfnOutput, CustomResource, Duration, RemovalPolicy, Stack, type StackProps,
   aws_appsync as appsync,
   aws_budgets as budgets,
   aws_cognito as cognito,
   aws_dynamodb as dynamodb,
+  aws_iam as iam,
   aws_lambda as lambda,
   aws_lambda_nodejs as nodejs,
   aws_logs as logs,
+  custom_resources as cr,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { QUERY_DEPTH_LIMIT, composeSchemaDir, rootFields } from "../../schema/compose";
@@ -19,6 +21,36 @@ export const APP_DOMAIN = "throne.ashershores.com";
 /** Budget alerts (the owner's personal address). */
 const BUDGET_EMAIL = "asher.shores5@gmail.com";
 const ROOT = path.join(__dirname, "..", "..");
+
+/**
+ * Web Push VAPID key pair (ticket 09), created on the first deploy by the VapidKeys custom resource
+ * (CloudFormation can't create a SecureString) and never overwritten: a new pair would orphan every
+ * device's subscription. The public key goes to the app in config.json; only the Notifier and the
+ * VapidKeys function may read the private key. The API Lambda has no SSM access at all.
+ */
+export const VAPID_PARAMS = { private: "/throne/vapid/private", public: "/throne/vapid/public" };
+
+const vapidParamArns = (stack: Stack) =>
+  [VAPID_PARAMS.private, VAPID_PARAMS.public].map((name) => `arn:aws:ssm:${stack.region}:${stack.account}:parameter${name}`);
+
+/** Settings the Lambdas added from ticket 09 share: bundled from the monorepo, Node 22 on ARM, two-week logs. */
+function lambdaFn(
+  scope: Construct,
+  id: string,
+  props: { entry: string; format: nodejs.OutputFormat } & Omit<nodejs.NodejsFunctionProps, "entry" | "bundling" | "logGroup">,
+) {
+  const { entry, format, ...rest } = props;
+  return new nodejs.NodejsFunction(scope, id, {
+    entry: path.join(ROOT, "api", "src", entry),
+    projectRoot: ROOT,
+    depsLockFilePath: path.join(ROOT, "package-lock.json"),
+    runtime: lambda.Runtime.NODEJS_22_X,
+    architecture: lambda.Architecture.ARM_64,
+    bundling: { minify: true, sourceMap: true, format, target: "node22" },
+    logGroup: new logs.LogGroup(scope, `${id.replace(/Fn$/, "")}Logs`, { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+    ...rest,
+  });
+}
 
 /** The composed schema/*.graphql, as a file for AppSync's Definition (see schema/compose.ts). */
 function composedSchemaFile(sdl: string) {
@@ -33,6 +65,8 @@ export class AppStack extends Stack {
   readonly client: cognito.UserPoolClient;
   readonly api: appsync.GraphqlApi;
   readonly table: dynamodb.TableV2;
+  /** The Web Push public key (base64url) for config.json. */
+  readonly vapidPublicKey: string;
 
   constructor(scope: Construct, id: string, props: StackProps) {
     super(scope, id, props);
@@ -137,6 +171,55 @@ export class AppStack extends Stack {
     for (const typeName of ["Query", "Mutation"] as const) {
       for (const fieldName of fields[typeName]) ds.createResolver(`${typeName[0]}${fieldName}`, { typeName, fieldName });
     }
+
+    // ---- push (ticket 09): VAPID keys, the Notifier, and the API's hand-off to it ----
+    // Logic and tests in api/src/vapid.ts. The resource returns only the public key; config.json reads it
+    // with a GetAtt, so the keys exist before config.json does.
+    const vapidFn = lambdaFn(this, "VapidKeysFn", {
+      entry: "vapidKeysProvider.ts",
+      format: nodejs.OutputFormat.ESM,
+      memorySize: 256,
+      timeout: Duration.seconds(30),
+      environment: { VAPID_PRIVATE_PARAM: VAPID_PARAMS.private, VAPID_PUBLIC_PARAM: VAPID_PARAMS.public },
+    });
+    // GetParameter covers the private key on purpose: vapid.ts reads it only to rebuild a missing public key
+    // after a crash between its two writes. No KMS statement: the AWS-managed aws/ssm key lets SSM decrypt for
+    // any principal allowed the SSM call.
+    vapidFn.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter", "ssm:PutParameter"], resources: vapidParamArns(this) }));
+    const vapidKeys = new CustomResource(this, "VapidKeys", {
+      resourceType: "Custom::VapidKeys",
+      serviceToken: new cr.Provider(this, "VapidKeysProvider", {
+        onEventHandler: vapidFn,
+        logGroup: new logs.LogGroup(this, "VapidKeysProviderLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
+      }).serviceToken,
+    });
+    this.vapidPublicKey = vapidKeys.getAttString("publicKey");
+
+    // Bundled as CJS: web-push is CommonJS and calls require("crypto"), which ESM output can't do.
+    const notifier = lambdaFn(this, "NotifierFn", {
+      entry: "notifier.ts",
+      format: nodejs.OutputFormat.CJS,
+      memorySize: 256,
+      timeout: Duration.seconds(30),
+      environment: {
+        TABLE_NAME: table.tableName,
+        VAPID_PRIVATE_PARAM: VAPID_PARAMS.private,
+        VAPID_PUBLIC_PARAM: VAPID_PARAMS.public,
+        VAPID_SUBJECT: `mailto:${BUDGET_EMAIL}`,
+      },
+    });
+    notifier.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: vapidParamArns(this) }));
+    // Only what notifier.ts calls: GetItem/Query to read prefs, Friendships, devices; DeleteItem to prune.
+    // Ticket 10 (Summary) adds what it needs.
+    table.grant(notifier, "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DeleteItem");
+    // An event push that fails is dropped, never retried: a retry after a partial send would push twice.
+    notifier.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(15) });
+    // The Notifier only comes up once the keys exist.
+    notifier.node.addDependency(vapidKeys);
+
+    // The API hands events to the Notifier with an async invoke (api/src/events.ts): that one function only.
+    fn.addEnvironment("NOTIFIER_FUNCTION", notifier.functionName);
+    notifier.grantInvoke(fn);
 
     // ---- cost tripwire: $1/month on the app=throne tag (lib/app.ts) ----
     const alert = (notificationType: string, threshold: number) => ({

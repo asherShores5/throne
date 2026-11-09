@@ -40,7 +40,7 @@ export function AvatarDot({ avatar, label }: { avatar: Avatar; label?: string })
   );
 }
 
-export function MonthCalendar({ people, directory, combined, viewerZone }: {
+export function MonthCalendar({ people, directory, combined, viewerZone, openDay }: {
   /** One person, or everyone (me first, then Friends in Friends-list order) when `combined`. */
   people: readonly Person[];
   /** Me and every Friend: names for Reactions and Comments, whoever's Calendar this is. */
@@ -48,11 +48,13 @@ export function MonthCalendar({ people, directory, combined, viewerZone }: {
   combined: boolean;
   /** The viewer's Home zone: decides "today" and which month opens first. */
   viewerZone: string;
+  /** A Day to open at once (a tapped push): its month shows with its Day sheet open. */
+  openDay?: string;
 }) {
   const today = dayOf(Date.now(), viewerZone);
   const thisMonth = monthOf(today);
-  const [month, setMonth] = useState(thisMonth);
-  const [open, setOpen] = useState<string>();
+  const [month, setMonth] = useState(openDay && openDay <= today ? monthOf(openDay) : thisMonth);
+  const [open, setOpen] = useState<string | undefined>(openDay && openDay <= today ? openDay : undefined);
   const { logs, loading, error, reload, replace } = useMonthLogs(month, people);
   const viewer = (directory.find((p) => p.me) ?? people[0]).id;
   const names = new Map(directory.map((p) => [p.id, { name: p.name, avatar: p.avatar }]));

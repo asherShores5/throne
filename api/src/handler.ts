@@ -6,6 +6,7 @@ import { UserError } from "./errors";
 import { RESOLVERS } from "./resolvers";
 
 export { setDocClient } from "./table";
+export { setEventSink } from "./events";
 
 export async function handler(event: AppSyncResolverEvent<Record<string, unknown>>) {
   const id = event.identity as AppSyncIdentityCognito | null;

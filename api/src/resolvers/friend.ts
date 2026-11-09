@@ -1,7 +1,9 @@
 // Friends (ticket 06). Schema: schema/friend.graphql; rules: shared/src/friend.ts. Items:
 //   FRIENDCODE#<code> / FRIENDCODE       { owner }: who has that Friend code (unique by conditional put)
 //   PROFILE#<sub> / FRIENDCODE           { code }: the Profile's current code
-//   PROFILE#<sub> / FRIEND#<other>       { since }: one side of a Friendship (the other side mirrors it)
+//   PROFILE#<sub> / FRIEND#<other>       { since, notifyLogs? }: one side of a Friendship (the other side mirrors
+//                                        it). notifyLogs: <sub> gets a push when <other> logs (ticket 09); it goes
+//                                        with the item, so ending the Friendship unfollows both ways.
 //   PROFILE#<sub> / FRIENDCOUNT          { n }: Friends now, so the cap of 3 holds under races
 //   PROFILE#<to> / FRIENDREQ#IN#<from>   { sentAt }: a Friend request waiting for <to>
 //   PROFILE#<from> / FRIENDREQ#OUT#<to>  { code, sentAt }: the same request, as its sender sees it
@@ -14,11 +16,12 @@
 // Reading another Profile's anything goes through isFriend(caller, other): one GetItem on the caller's
 // own partition (ticket 07's Friend Calendar, 08's Reactions, 10's Summary).
 import { randomBytes } from "node:crypto";
-import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import {
   FRIEND_REQUESTS_PER_WINDOW, MAX_FRIENDS, formatFriendCode, friendCodeFrom, parseFriendCode, sendsInWindow, type Avatar,
 } from "@throne/shared";
 import { now } from "../clock";
+import { emit } from "../events";
 import { clearResponses } from "./reaction";
 import { UserError, invalid } from "../errors";
 import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "../table";
@@ -94,6 +97,42 @@ export async function requireFriend(ctx: Ctx, other: string, notFound: () => Use
 /** The Profile ids of `sub`'s Friends (e.g. for the Summary). */
 export async function friendIds(sub: string): Promise<string[]> {
   return (await query(sub, FRIEND_PREFIX)).map((f) => f.other);
+}
+
+/** True while `from`'s Friend request to `to` is waiting (the Notifier checks before pushing it). */
+export async function hasFriendRequest(to: string, from: string): Promise<boolean> {
+  return !!(await get(inKey(to, from)));
+}
+
+/** The Friends of `sub` who follow `sub`'s Logs (their side of the Friendship has notifyLogs). */
+export async function followersOf(sub: string): Promise<string[]> {
+  const ids = await friendIds(sub);
+  const sides = await Promise.all(ids.map((f) => get(friendKey(f, sub))));
+  return ids.filter((_, i) => sides[i]?.notifyLogs === true);
+}
+
+/** The Friends `sub` follows ("Friend logged" pushes). */
+export async function followedBy(sub: string): Promise<string[]> {
+  return (await query(sub, FRIEND_PREFIX)).filter((f) => f.item.notifyLogs === true).map((f) => f.other);
+}
+
+/** Follow (or stop following) a Friend's Logs. Not a Friend (any more): nothing happens. */
+export async function setFollow(sub: string, other: string, on: boolean): Promise<void> {
+  try {
+    await ddb().send(
+      new UpdateCommand({
+        TableName: TABLE,
+        Key: friendKey(sub, other),
+        UpdateExpression: "SET #notify = :on",
+        // Never brings back a Friendship that just ended.
+        ConditionExpression: "attribute_exists(#pk)",
+        ExpressionAttributeNames: { "#pk": "PK", "#notify": "notifyLogs" },
+        ExpressionAttributeValues: { ":on": on },
+      }),
+    );
+  } catch (e) {
+    if (!isConditionFailed(e)) throw e;
+  }
 }
 
 /** What a Friend (or a Friend request's receiver) may see of a Profile. Undefined if it's gone. */
@@ -238,9 +277,9 @@ const clearRequests = (a: string, b: string) => [inKey(b, a), outKey(a, b), inKe
 /**
  * `me` accepts the Friend request `sender` sent: one transaction writes both Friendship sides and bumps
  * both counts (each refused past 3) and clears the requests. Already Friends (a crossing auto-accept
- * won first) counts as done.
+ * won first, or a retry) counts as done. True if this call made the Friendship (and then `sender` is told).
  */
-async function befriend(me: string, sender: string): Promise<void> {
+async function befriend(me: string, sender: string): Promise<boolean> {
   const since = now();
   const [mustHaveRequest, ...otherClears] = clearRequests(sender, me); // first: inKey(me, sender)
   try {
@@ -259,12 +298,14 @@ async function befriend(me: string, sender: string): Promise<void> {
   } catch (e) {
     const failed = failedConditions(e);
     if (!failed) throw e;
-    if (failed[4] || failed[5]) return;
+    if (failed[4] || failed[5]) return false;
     if (failed[0]) throw requestNotFound();
     if (failed[6]) throw invalid(YOU_FULL);
     if (failed[7]) throw invalid(THEY_FULL);
     throw e;
   }
+  await emit({ kind: "friendAccepted", to: sender, from: me });
+  return true;
 }
 
 async function friendOut(me: string, other: string) {
@@ -297,6 +338,7 @@ async function sendRequest(ctx: Ctx, typed: unknown): Promise<"SENT" | "FRIENDS"
         ],
       }),
     );
+    await emit({ kind: "friendRequest", to, from: ctx.sub });
   } catch (e) {
     if (!failedConditions(e)) throw e; // already sent: the first request stands
   }

@@ -24,7 +24,11 @@ export const CSP = contentSecurityPolicy({ region: "us-west-1", graphqlHost: new
 /** Content-Security-Policy violations seen by any page (lib.ts fails the checklist on any). */
 export const cspViolations: string[] = [];
 
-const CONFIG = { region: "us-west-1", userPoolId: "us-west-1_e2e", clientId: "e2e-client", graphqlUrl: GRAPHQL_URL };
+// The VAPID public key is a well-formed P-256 point (from the web-push docs); e2e never sends a push.
+const CONFIG = {
+  region: "us-west-1", userPoolId: "us-west-1_e2e", clientId: "e2e-client", graphqlUrl: GRAPHQL_URL,
+  vapidPublicKey: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
+};
 
 /** The page's time zone (what the app sends as the device's Home zone). */
 export const TIME_ZONE = "America/Los_Angeles";
@@ -48,6 +52,11 @@ export interface OpenOptions {
   authenticator?: boolean;
   /** Let the app's service worker run (off by default, so routes see every request). */
   serviceWorkers?: boolean;
+  /**
+   * A stand-in push service (needs serviceWorkers): notification permission given, and
+   * PushManager.subscribe hands out a fake fcm.googleapis.com subscription kept in localStorage.
+   */
+  fakePush?: boolean;
   /** Fake the page's clock from this moment (Playwright clock: timers and Date; time keeps running). */
   clock?: Date | string;
   /** Open this path (and #hash) instead of "/", e.g. an Invite link's "/invite#<token>". */
@@ -64,6 +73,27 @@ export async function launch() {
       ...screen, serviceWorkers: opts.serviceWorkers ? "allow" : "block", timezoneId: TIME_ZONE, colorScheme: opts.dark ? "dark" : "light",
     });
     if (opts.clock) await context.clock.install({ time: opts.clock });
+    if (opts.fakePush) {
+      // A string, not a function: tsx would add esbuild's __name helper, which the page doesn't have.
+      await context.addInitScript(`(() => {
+        const KEY = "e2e.pushEndpoint";
+        const keys = { p256dh: "${CONFIG.vapidPublicKey}", auth: "tBHItJI5svbpez7KI4CCXg" };
+        function fake(endpoint) {
+          return { endpoint, toJSON: () => ({ endpoint, keys }), unsubscribe: async () => (localStorage.removeItem(KEY), true) };
+        }
+        // Headless Chromium reports notifications as denied even when granted: pretend the Profile said yes.
+        Object.defineProperty(Notification, "permission", { get: () => "granted" });
+        Notification.requestPermission = async () => "granted";
+        const proto = self.PushManager && self.PushManager.prototype;
+        if (!proto) return;
+        proto.getSubscription = async () => { const e = localStorage.getItem(KEY); return e ? fake(e) : null; };
+        proto.subscribe = async () => {
+          const e = "https://fcm.googleapis.com/fcm/send/e2e-" + crypto.randomUUID();
+          localStorage.setItem(KEY, e);
+          return fake(e);
+        };
+      })();`);
+    }
     const page = await context.newPage();
     if (opts.authenticator) {
       const cdp = await context.newCDPSession(page);

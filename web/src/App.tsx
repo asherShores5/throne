@@ -1,7 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { isSignedIn, onAuthChange } from "./auth";
 import { loadConfig } from "./config";
-import { usePath } from "./route";
+import { navigateMessage } from "./deepLink";
+import { navigate, usePath } from "./route";
 import { Home } from "./views/Home";
 import { Join } from "./views/Join";
 import { Login } from "./views/Login";
@@ -12,6 +13,17 @@ export function App() {
   const [configError, setConfigError] = useState<string>();
   const signedIn = useSyncExternalStore(onAuthChange, isSignedIn);
   const path = usePath();
+
+  // A tapped push while the app is open: the service worker says where to go (sw/sw.ts).
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      const to = navigateMessage(e.data);
+      if (to) navigate(to);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, []);
 
   useEffect(() => {
     loadConfig().then(() => setConfigured(true), (e) => setConfigError(String(e)));

@@ -12,9 +12,10 @@
 // anyone else only their own (out() in resolvers/log.ts).
 import { QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import {
-  COMMENTS_PER_LOG_MAX, hasResponsesFrom, isLogId, isReactionEmoji, parseCommentText, withoutAuthor, type Comment, type Responses,
+  COMMENTS_PER_LOG_MAX, hasResponsesFrom, isLogId, isReactionEmoji, parseCommentText, withoutAuthor, type Comment, type PushEvent, type Responses,
 } from "@throne/shared";
 import { now } from "../clock";
+import { emit } from "../events";
 import { UserError, invalid } from "../errors";
 import { TABLE, ddb, profilePk } from "../table";
 import { FRIEND_PREFIX, requireFriend } from "./friend";
@@ -71,9 +72,13 @@ function writeItems(owner: string, rec: Record<string, unknown>, next: Required<
 
 /**
  * Read the Log, apply `change`, write it back; again from the top if something else changed it in between.
- * `author` is whose pointer the change affects; `friendOf` as in writeItems.
+ * `author` is whose pointer the change affects; `friendOf` as in writeItems. `tell`: the push event for the
+ * owner, handed to the Notifier once the write has committed (never when nothing changed, e.g. a retry).
  */
-async function change(ctx: Ctx, owner: string, logId: string, author: (rec: Record<string, unknown>) => string | undefined, fn: Change, friendOf?: string): Promise<Log> {
+async function change(
+  ctx: Ctx, owner: string, logId: string, author: (rec: Record<string, unknown>) => string | undefined, fn: Change, friendOf?: string,
+  tell?: (rec: Record<string, unknown>) => PushEvent,
+): Promise<Log> {
   for (let i = 0; i < TRIES; i++) {
     const rec = await read(profilePk(owner), logId);
     if (!rec) throw noLog();
@@ -83,6 +88,7 @@ async function change(ctx: Ctx, owner: string, logId: string, author: (rec: Reco
     if (!who || same(before, next)) return out(rec, ctx.sub);
     try {
       await ddb().send(new TransactWriteCommand({ TransactItems: writeItems(owner, rec, next, who, friendOf) }));
+      if (tell) await emit(tell(rec));
       return out({ ...rec, ...next, rv: ((rec.rv as number) ?? 0) + 1 }, ctx.sub);
     } catch (e) {
       if (!cancelled(e)) throw e;
@@ -115,7 +121,7 @@ async function setReaction(ctx: Ctx, args: Record<string, unknown>): Promise<Log
   return change(ctx, owner, logId, () => ctx.sub, (r) => {
     const { [ctx.sub]: _old, ...others } = r.reactions;
     return { ...r, reactions: emoji === null ? others : { ...others, [ctx.sub]: emoji } };
-  }, ctx.sub);
+  }, ctx.sub, emoji === null ? undefined : (rec) => ({ kind: "reaction", to: owner, from: ctx.sub, logId, day: rec.day as string }));
 }
 
 async function addComment(ctx: Ctx, args: Record<string, unknown>): Promise<Log> {
@@ -128,7 +134,7 @@ async function addComment(ctx: Ctx, args: Record<string, unknown>): Promise<Log>
     if (r.comments.some((c) => c.id === commentId)) return r; // a retry: it's already there
     if (r.comments.length >= COMMENTS_PER_LOG_MAX) throw invalid(`${COMMENTS_PER_LOG_MAX} Comments on a Log is the limit.`);
     return { ...r, comments: [...r.comments, { id: commentId, author: ctx.sub, text: parsed.text, at: new Date(now()).toISOString() }] };
-  }, ctx.sub);
+  }, ctx.sub, (rec) => ({ kind: "comment", to: owner, from: ctx.sub, logId, day: rec.day as string }));
 }
 
 async function deleteComment(ctx: Ctx, args: Record<string, unknown>): Promise<Log> {
