@@ -24,7 +24,8 @@ type FriendRequest {
 # A Friend request the caller sent and nobody has answered yet. Only the code the caller typed, never
 # the receiver's Display name: they aren't Friends yet.
 type SentFriendRequest {
-  # The receiver's Profile id (what cancel takes).
+  # An opaque id for this request (what cancel takes). Never the receiver's Profile id: the caller
+  # only learns that once they are Friends.
   id: ID!
   # The Friend code it was sent to, as shown (e.g. 4KQ-9XM).
   code: String!
@@ -59,8 +60,9 @@ extend type Mutation {
   acceptFriendRequest(from: ID!): Friend!
   # Decline a Friend request from `from`. Declining one that's gone succeeds.
   declineFriendRequest(from: ID!): Boolean!
-  # Take back a Friend request the caller sent to `to`. Cancelling one that's gone succeeds.
-  cancelFriendRequest(to: ID!): Boolean!
+  # Take back a Friend request the caller sent (`request` = its SentFriendRequest id). Cancelling one
+  # that's gone succeeds.
+  cancelFriendRequest(request: ID!): Boolean!
   # End the Friendship with `friend`, for both. Ending one that's already over succeeds.
   endFriendship(friend: ID!): Boolean!
 }

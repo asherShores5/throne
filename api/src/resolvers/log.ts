@@ -17,7 +17,7 @@ import {
 import { now } from "../clock";
 import { emit } from "../events";
 import { UserError, invalid } from "../errors";
-import { TABLE, ddb, isConditionFailed, profilePk } from "../table";
+import { TABLE, ddb, failedConditions, isConditionFailed, profilePk } from "../table";
 import { requireFriend } from "./friend";
 import { ensureProfile } from "./profile";
 import type { Ctx, ResolverModule } from "./types";
@@ -121,13 +121,6 @@ export function sameResponses(rec: Record<string, unknown>): { expr: string; val
   return rec.rv === undefined ? { expr: "attribute_not_exists(#rv)", values: {} } : { expr: "#rv = :rv", values: { ":rv": rec.rv } };
 }
 
-/** Which actions of a cancelled transaction failed their condition (index-aligned); undefined if it wasn't that. */
-function failedConditions(e: unknown): boolean[] | undefined {
-  const err = e as { name?: string; CancellationReasons?: { Code?: string }[] };
-  if (err?.name !== "TransactionCanceledException") return undefined;
-  return (err.CancellationReasons ?? []).map((r) => r.Code === "ConditionalCheckFailed");
-}
-
 async function findSk(pk: string, id: string): Promise<string | undefined> {
   const r = await ddb().send(new GetCommand({ TableName: TABLE, Key: { PK: pk, SK: idSk(id) } }));
   return r.Item?.sk as string | undefined;
@@ -177,6 +170,8 @@ async function createLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log>
       new TransactWriteCommand({
         TransactItems: [
           { Put: { TableName: TABLE, Item: { PK: pk, SK: idSk(id), sk }, ConditionExpression: "attribute_not_exists(#pk)", ExpressionAttributeNames: { "#pk": "PK" } } },
+          // No rv condition needed: the LOGID# Put above (attribute_not_exists) is the guard. If this id
+          // exists the whole transaction fails, so this Put only ever writes a Log nobody could react to yet.
           { Put: { TableName: TABLE, Item: rec } },
           countUp(pk, day),
         ],
@@ -225,6 +220,8 @@ async function updateLog(ctx: Ctx, input: Record<string, unknown>): Promise<Log>
         new TransactWriteCommand({
           TransactItems: [
             { Delete: { TableName: TABLE, Key: { PK: pk, SK: old.SK }, ...unchanged } },
+            // No rv condition needed: the Delete above carries it (same transaction), and the new SK holds
+            // this Log's id, so nothing is there to overwrite; the Reactions/Comments read with `old` move over.
             { Put: { TableName: TABLE, Item: rec } },
             {
               Put: {

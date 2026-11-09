@@ -9,10 +9,10 @@
 //   PROFILE#<person> / INSUMMARY#<owner>#<weekStart>   {}: <person> has a row in <owner>'s Summary of that week
 // for every person other than the owner, with a check that nobody in it is being deleted (their DELETED marker).
 // scrubFromSummaries(person) then removes their row and their Awards from each one.
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { addDays, personWeek, weekAwards, type AwardResult, type PersonWeek, type SummaryWeek, type WeekLog } from "@throne/shared";
 import { now } from "../clock";
-import { TABLE, ddb, deletedKey, isConditionFailed, profilePk } from "../table";
+import { TABLE, ddb, deletedKey, failedConditions, isConditionFailed, profilePk, queryPrefix } from "../table";
 import { friendIds, profileCard } from "./friend";
 import { logItems } from "./log";
 import type { ResolverModule } from "./types";
@@ -108,9 +108,8 @@ export async function claimSummary(sub: string, s: StoredSummary): Promise<"stor
     }));
     return "stored";
   } catch (e) {
-    const err = e as { name?: string; CancellationReasons?: { Code?: string }[] };
-    if (err?.name !== "TransactionCanceledException") throw e;
-    const failed = (err.CancellationReasons ?? []).map((r) => r.Code === "ConditionalCheckFailed");
+    const failed = failedConditions(e);
+    if (!failed) throw e;
     if (failed[0]) return "exists";
     const gone = checked.filter((_, i) => failed[1 + others.length + i]);
     if (!gone.length) throw e;
@@ -126,19 +125,7 @@ export async function claimSummary(sub: string, s: StoredSummary): Promise<"stor
  */
 export async function scrubFromSummaries(person: string): Promise<void> {
   const pk = profilePk(person);
-  const pointers: string[] = [];
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": pk, ":p": IN_SUMMARY_PREFIX },
-      ExclusiveStartKey: start,
-    }));
-    pointers.push(...(r.Items ?? []).map((i) => String(i.SK)));
-    start = r.LastEvaluatedKey;
-  } while (start);
+  const pointers = (await queryPrefix(pk, IN_SUMMARY_PREFIX)).map((i) => String(i.SK));
 
   for (const sk of pointers) {
     const [owner, weekStart] = sk.slice(IN_SUMMARY_PREFIX.length).split("#");
@@ -152,21 +139,11 @@ export async function scrubFromSummaries(person: string): Promise<void> {
  * goes after its pointers, so a stopped run still finds the pointers through it.
  */
 export async function forgetOwnSummaries(owner: string): Promise<void> {
-  for (;;) {
-    const r = await ddb().send(new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": profilePk(owner), ":p": SUMMARY_PREFIX },
-    }));
-    const items = r.Items ?? [];
-    if (!items.length) return;
-    for (const s of items) {
-      for (const p of (s.people as StoredPerson[]) ?? []) {
-        if (p.id !== owner) await ddb().send(new DeleteCommand({ TableName: TABLE, Key: inSummaryKey(p.id, owner, s.weekStart as string) }));
-      }
-      await ddb().send(new DeleteCommand({ TableName: TABLE, Key: { PK: s.PK, SK: s.SK } }));
+  for (const s of await queryPrefix(profilePk(owner), SUMMARY_PREFIX)) {
+    for (const p of (s.people as StoredPerson[]) ?? []) {
+      if (p.id !== owner) await ddb().send(new DeleteCommand({ TableName: TABLE, Key: inSummaryKey(p.id, owner, s.weekStart as string) }));
     }
+    await ddb().send(new DeleteCommand({ TableName: TABLE, Key: { PK: s.PK, SK: s.SK } }));
   }
 }
 
@@ -211,15 +188,8 @@ export const summary: ResolverModule = {
   Query: {
     /** The caller's own Summaries, newest first. Never anyone else's: the partition is the caller's sub. */
     async summaries(ctx) {
-      const r = await ddb().send(new QueryCommand({
-        TableName: TABLE,
-        KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-        ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-        ExpressionAttributeValues: { ":pk": profilePk(ctx.sub), ":p": SUMMARY_PREFIX },
-        ScanIndexForward: false,
-        Limit: HISTORY_MAX,
-      }));
-      return (r.Items ?? []).map((i) => out(i, ctx.sub));
+      const items = await queryPrefix(profilePk(ctx.sub), SUMMARY_PREFIX, { descending: true, max: HISTORY_MAX });
+      return items.map((i) => out(i, ctx.sub));
     },
   },
   Mutation: {},

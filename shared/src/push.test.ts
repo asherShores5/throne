@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_PUSH_PREFS, PUSH_DEVICES_MAX, SCHEDULED_RUN, eventPushPayload, isScheduledRun, parsePushEvent, summaryPushPayload, parsePushPrefsInput, parsePushSubscription, pushLinks, readPushPrefs,
+  DEFAULT_PUSH_PREFS, PUSH_DEVICES_MAX, PUSH_KINDS, SCHEDULED_RUN, eventPushPayload, isScheduledRun, parsePushEvent, summaryPushPayload, parsePushPrefsInput, parsePushSubscription, pushLinks, readPushPrefs,
 } from "./push";
 
 const KEYS = { p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM", auth: "tBHItJI5svbpez7KI4CCXg" };
@@ -104,5 +104,21 @@ describe("push text", () => {
     expect(summaryPushPayload()).toEqual({
       title: "Throne", body: "Last week's Summary is ready", data: { kind: "summary", url: "/summary" },
     });
+  });
+});
+
+describe("push kinds", () => {
+  it("every kind has its rule: toggle (or per Friend), re-check, shape, TTL, topic", () => {
+    expect(PUSH_KINDS.friendRequest).toMatchObject({ toggle: "friendRequests", recheck: "request", shape: "pair" });
+    expect(PUSH_KINDS.friendAccepted).toMatchObject({ toggle: "friendRequests", recheck: "friendship", shape: "pair" });
+    expect(PUSH_KINDS.reaction).toMatchObject({ toggle: "reactionsComments", recheck: "friendship", shape: "log" });
+    expect(PUSH_KINDS.comment).toMatchObject({ toggle: "reactionsComments", recheck: "friendship", shape: "log" });
+    expect(PUSH_KINDS.friendLogged).toMatchObject({ recheck: "followers", shape: "followed", topic: "sender", ttl: 6 * 3600 });
+    expect(PUSH_KINDS.summary).toMatchObject({ toggle: "summary", recheck: "none", topic: "fixed", ttl: 24 * 3600 });
+  });
+
+  it("the Summary kind is not an event", () => {
+    expect(parsePushEvent({ kind: "summary", to: "b", from: "a" })).toBeUndefined();
+    expect(parsePushEvent({ kind: "toString", to: "b", from: "a" })).toBeUndefined();
   });
 });

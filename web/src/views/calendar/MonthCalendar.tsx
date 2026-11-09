@@ -5,6 +5,7 @@
 // sheet (my Logs editable, a Friend's read-only). Each Log sits on its own Day (its Log zone).
 import { useState } from "react";
 import { addMonths, combinedColors, dayCounts, dayOf, formatAverage, heatLevel, monthOf, monthStats, type Avatar } from "@throne/shared";
+import { monthName, monthTitle, shortDay } from "../dayLabels";
 import { DaySheet } from "./DaySheet";
 import { MonthGrid } from "./MonthGrid";
 import { useMonthLogs } from "./monthLogs";
@@ -20,15 +21,6 @@ export interface Person {
   name: string;
   avatar: Avatar;
 }
-
-/** e.g. "November 2026". */
-export const monthTitle = (month: string) =>
-  new Date(`${month}-15T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", month: "long", year: "numeric" });
-
-const monthName = (month: string) => new Date(`${month}-15T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", month: "long" });
-
-const shortDay = (day: string) =>
-  new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" });
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 

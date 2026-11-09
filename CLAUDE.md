@@ -53,7 +53,7 @@ code and UI.
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
   new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
-  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `push.ts`: push prefs defaults/edits, the push-service endpoint allowlist + 10-device cap, the PushEvent the API hands the Notifier, push text (`eventPushPayload`, no Details) and tap links (`pushLinks`); `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji; `summary.ts`: when a Summary is due (`dueSummaryWeek`: Monday from 08:00 in the Home zone, for last Monday-Sunday), one person's numbers (`personWeek`), the Awards (`weekAwards`, thresholds as constants; Early bird/Night owl need 3+ Days, a default); `push.ts` also has `summaryPushPayload` (no numbers) and `SCHEDULED_RUN`, the hourly schedule's event), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `push.ts`: push prefs defaults/edits, the push-service endpoint allowlist + 10-device cap, the PushEvent the API hands the Notifier, push text (`eventPushPayload`, no Details) and tap links (`pushLinks`); `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji; `summary.ts`: when a Summary is due (`dueSummaryWeek`: Monday from 08:00 in the Home zone, for last Monday-Sunday), one person's numbers (`personWeek`), the Awards (`weekAwards`, thresholds as constants; Early bird/Night owl need 3+ nights, a default, and count a Log before 04:00 local as the night before, `NIGHT_ENDS_HOUR`); `push.ts` also has `summaryPushPayload` (no numbers) and `SCHEDULED_RUN`, the hourly schedule's event), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -162,6 +162,10 @@ code and UI.
   the deepest equals the cap, and that every root field is used by the app.
 - **Never write a Log item without the `rv` condition** (`sameResponses`/`unchangedSince` in `resolvers/log.ts`):
   a blind Put or Delete would wipe a Reaction or Comment that landed after the read (or leave its pointer).
+  The only exceptions, each commented where it happens: `createLog`'s Put (the `LOGID#` `attribute_not_exists` in
+  the same transaction guards it: a new Log has nothing on it yet), `updateLog`'s Put to the new SK when the
+  Log moves (the Delete of the old item in the same transaction carries the `rv` condition), and Delete
+  Profile's `sweep()` (the DELETED marker is down and no Friendship is left, so nothing can land).
 - **The handler reads env at import time**: tests and e2e import it through `api/src/testing/harness.ts` /
   `e2e/backend.ts`, which set the env first. Never import it statically in a test.
 - **Self sign-up is on only because of the Invite pre-sign-up trigger** (`api/src/preSignUp.ts`); never remove

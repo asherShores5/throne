@@ -223,7 +223,7 @@ export async function signOut() {
   // A device-wide flag that would mislead the next person on a shared device.
   localStorage.removeItem(HAS_PASSKEY);
   save(null);
-  // After save(null): sync/logs.ts has switched away from this user, so nothing writes the copy back.
+  // After save(null): sync/logs.ts has switched away from this username, so nothing writes the copy back.
   if (u) forgetOnSignOut(localStorage, u);
   if (t) await cognito("RevokeToken", { Token: t.refreshToken, ClientId: getConfig().clientId }).catch(() => {});
 }

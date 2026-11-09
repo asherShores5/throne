@@ -8,11 +8,11 @@
 //                                     subscription. Keyed by the caller's sub, so nobody touches another's;
 //                                     the Notifier deletes it when the push service says it's gone.
 // The Notifier (api/src/notifier.ts) reads all three; this module only writes them.
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { PUSH_DEVICES_MAX, isDeviceId, parsePushPrefsInput, parsePushSubscription, readPushPrefs, type PushPrefs } from "@throne/shared";
 import { now } from "../clock";
 import { invalid } from "../errors";
-import { PROFILE_SK, TABLE, ddb, profilePk } from "../table";
+import { PROFILE_SK, TABLE, ddb, profilePk, queryPrefix } from "../table";
 import { followedBy, friendIds, setFollow } from "./friend";
 import { ensureProfile } from "./profile";
 import type { Ctx, ResolverModule } from "./types";
@@ -53,13 +53,7 @@ async function updatePushPrefs(ctx: Ctx, input: unknown): Promise<PushPrefs> {
 }
 
 async function deviceCount(sub: string): Promise<number> {
-  const r = await ddb().send(new QueryCommand({
-    TableName: TABLE, Select: "COUNT",
-    KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-    ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-    ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": PUSH_PREFIX },
-  }));
-  return r.Count ?? 0;
+  return (await queryPrefix(profilePk(sub), PUSH_PREFIX)).length;
 }
 
 async function putPushSubscription(ctx: Ctx, input: unknown) {

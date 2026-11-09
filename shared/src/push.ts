@@ -121,28 +121,7 @@ export type PushEvent =
   | { kind: "reaction" | "comment"; to: string; from: string; logId: string; day: string }
   | { kind: "friendLogged"; from: string; logId: string; day: string };
 
-const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 128;
-const isDayString = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
-
-/** A PushEvent rebuilt field by field from whatever arrived; undefined if it isn't one. */
-export function parsePushEvent(e: unknown): PushEvent | undefined {
-  if (!e || typeof e !== "object") return undefined;
-  const r = e as Record<string, unknown>;
-  switch (r.kind) {
-    case "friendRequest":
-    case "friendAccepted":
-      return isId(r.to) && isId(r.from) ? { kind: r.kind, to: r.to, from: r.from } : undefined;
-    case "reaction":
-    case "comment":
-      return isId(r.to) && isId(r.from) && isId(r.logId) && isDayString(r.day)
-        ? { kind: r.kind, to: r.to, from: r.from, logId: r.logId, day: r.day }
-        : undefined;
-    case "friendLogged":
-      return isId(r.from) && isId(r.logId) && isDayString(r.day) ? { kind: r.kind, from: r.from, logId: r.logId, day: r.day } : undefined;
-    default:
-      return undefined;
-  }
-}
+export type PushKind = PushEvent["kind"] | "summary";
 
 /** What the hourly schedule (infra/lib/stacks.ts) invokes the Notifier with: the weekly Summary run. */
 export const SCHEDULED_RUN = Object.freeze({ run: "summary" });
@@ -150,8 +129,6 @@ export const SCHEDULED_RUN = Object.freeze({ run: "summary" });
 /** True for the hourly schedule's event (anything else that isn't a PushEvent is ignored). */
 export const isScheduledRun = (e: unknown): boolean =>
   typeof e === "object" && e !== null && (e as { run?: unknown }).run === SCHEDULED_RUN.run;
-
-// ---- payloads ---------------------------------------------------------------
 
 /** Where a tap goes (web/src/deepLink.ts opens it). */
 export const pushLinks = {
@@ -162,7 +139,58 @@ export const pushLinks = {
   summary: "/summary",
 } as const;
 
-export type PushKind = PushEvent["kind"] | "summary";
+const HOUR = 3600;
+
+/** Everything that differs between push kinds, in one place (the Notifier and the payload builders read it). */
+export interface PushKindRule {
+  /** The toggle that lets it through; undefined = picked per Friend instead ("Friend logged"). */
+  toggle?: keyof PushToggles;
+  /** Seconds the push service keeps it undelivered (RFC 8030 §5.2). */
+  ttl: number;
+  /**
+   * A newer push with the same topic replaces an undelivered one (RFC 8030 §5.4): "sender" = one per Friend who
+   * did it, "fixed" = one for the kind; undefined = each stands alone.
+   */
+  topic?: "sender" | "fixed";
+  /**
+   * What the Notifier re-checks before sending (it may run after the fact changed): the Friend request still
+   * waiting, the Friendship still there, or who follows the sender now; "none" for the scheduled Summary.
+   */
+  recheck: "request" | "friendship" | "followers" | "none";
+  /** The event's fields besides `kind`: to + from ("pair"), plus the Log ("log"), or from + the Log ("followed"). */
+  shape?: "pair" | "log" | "followed";
+  /** Push text from the doer's Display name (nothing else goes in). */
+  body: (name: string) => string;
+}
+
+export const PUSH_KINDS: Readonly<Record<PushKind, Readonly<PushKindRule>>> = Object.freeze({
+  // A Friend request or Reaction still matters tomorrow; a "Friend logged" is stale after a few hours.
+  friendRequest: { toggle: "friendRequests", ttl: 24 * HOUR, recheck: "request", shape: "pair", body: (n: string) => `${n} sent you a Friend request` },
+  friendAccepted: { toggle: "friendRequests", ttl: 24 * HOUR, recheck: "friendship", shape: "pair", body: (n: string) => `${n} accepted your Friend request` },
+  reaction: { toggle: "reactionsComments", ttl: 24 * HOUR, recheck: "friendship", shape: "log", body: (n: string) => `${n} reacted to your Log` },
+  comment: { toggle: "reactionsComments", ttl: 24 * HOUR, recheck: "friendship", shape: "log", body: (n: string) => `${n} commented on your Log` },
+  friendLogged: { ttl: 6 * HOUR, topic: "sender", recheck: "followers", shape: "followed", body: (n: string) => `${n} logged` },
+  // No counts or names (it can show on a lock screen). A newer one replaces an older (a phone off all week).
+  summary: { toggle: "summary", ttl: 24 * HOUR, topic: "fixed", recheck: "none", body: () => "Last week's Summary is ready" },
+} satisfies Record<PushKind, PushKindRule>);
+
+const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 128;
+const isDayString = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
+/** A PushEvent rebuilt field by field from whatever arrived; undefined if it isn't one. */
+export function parsePushEvent(e: unknown): PushEvent | undefined {
+  if (!e || typeof e !== "object") return undefined;
+  const r = e as Record<string, unknown>;
+  const kind = r.kind as PushKind;
+  const shape = typeof kind === "string" && Object.hasOwn(PUSH_KINDS, kind) ? PUSH_KINDS[kind].shape : undefined;
+  if (!shape || !isId(r.from)) return undefined;
+  if (shape === "pair") return isId(r.to) ? ({ kind, to: r.to, from: r.from } as PushEvent) : undefined;
+  if (!isId(r.logId) || !isDayString(r.day)) return undefined;
+  if (shape === "followed") return { kind, from: r.from, logId: r.logId, day: r.day } as PushEvent;
+  return isId(r.to) ? ({ kind, to: r.to, from: r.from, logId: r.logId, day: r.day } as PushEvent) : undefined;
+}
+
+// ---- payloads ---------------------------------------------------------------
 
 /** What a push carries, as the service worker reads it: `showNotification(title, { body, data })`. */
 export interface PushPayload {
@@ -173,24 +201,18 @@ export interface PushPayload {
 
 const TITLE = "Throne";
 
+/** Where an event's push opens: the Log's Day (on the Friend's Calendar for friendLogged) or the Friends tab. */
+function eventLink(e: PushEvent): string {
+  if (e.kind === "friendLogged") return pushLinks.day(e.day, e.from);
+  return "day" in e ? pushLinks.day(e.day) : pushLinks.friends;
+}
+
 /** The push for one event, given the Display name of who did it. Only the name and the kind go in. */
 export function eventPushPayload(e: PushEvent, fromName: string): PushPayload {
-  const p = (body: string, url: string): PushPayload => ({ title: TITLE, body, data: { kind: e.kind, url } });
-  switch (e.kind) {
-    case "friendRequest":
-      return p(`${fromName} sent you a Friend request`, pushLinks.friends);
-    case "friendAccepted":
-      return p(`${fromName} accepted your Friend request`, pushLinks.friends);
-    case "reaction":
-      return p(`${fromName} reacted to your Log`, pushLinks.day(e.day));
-    case "comment":
-      return p(`${fromName} commented on your Log`, pushLinks.day(e.day));
-    case "friendLogged":
-      return p(`${fromName} logged`, pushLinks.day(e.day, e.from));
-  }
+  return { title: TITLE, body: PUSH_KINDS[e.kind].body(fromName), data: { kind: e.kind, url: eventLink(e) } };
 }
 
 /** The weekly Summary push: no counts or names (it can show on a lock screen), just a way in. */
 export function summaryPushPayload(): PushPayload {
-  return { title: TITLE, body: "Last week's Summary is ready", data: { kind: "summary", url: pushLinks.summary } };
+  return { title: TITLE, body: PUSH_KINDS.summary.body(""), data: { kind: "summary", url: pushLinks.summary } };
 }

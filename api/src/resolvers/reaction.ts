@@ -12,14 +12,14 @@
 //
 // Who sees what is decided here, not by the client: the owner gets every Reaction and Comment on their Logs,
 // anyone else only their own (out() in resolvers/log.ts).
-import { QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import {
   COMMENTS_PER_AUTHOR_MAX, hasResponsesFrom, isLogId, isReactionEmoji, parseCommentText, withoutAuthor, type Comment, type PushEvent, type Responses,
 } from "@throne/shared";
 import { now } from "../clock";
 import { emit } from "../events";
 import { UserError, invalid } from "../errors";
-import { TABLE, ddb, profilePk } from "../table";
+import { TABLE, ddb, isCancelled, profilePk, queryPrefix } from "../table";
 import { FRIEND_PREFIX, requireFriend } from "./friend";
 import { RESPONSE_POINTER_PREFIX, RESPONSE_TO_PREFIX, out, read, responsePointerSk, responseToKey, sameResponses, type Log } from "./log";
 import type { Ctx, ResolverModule } from "./types";
@@ -35,10 +35,6 @@ function current(rec: Record<string, unknown>): Required<Responses> {
 }
 
 const same = (a: Required<Responses>, b: Required<Responses>) => JSON.stringify(a) === JSON.stringify(b);
-
-function cancelled(e: unknown) {
-  return (e as { name?: string })?.name === "TransactionCanceledException";
-}
 
 /**
  * One write of a Log's Reactions/Comments plus the pointer for `author` (put while they still have something
@@ -96,7 +92,7 @@ async function change(
       if (tell) await emit(tell(rec));
       return out({ ...rec, ...next, rv: ((rec.rv as number) ?? 0) + 1 }, ctx.sub);
     } catch (e) {
-      if (!cancelled(e)) throw e;
+      if (!isCancelled(e)) throw e;
       // The Friendship ended in between: from now on they're a stranger.
       if (friendOf) await requireFriend(ctx, owner, noLog);
       // Otherwise the Log changed (another Reaction, an edit, a delete): read it again.
@@ -168,21 +164,7 @@ async function deleteComment(ctx: Ctx, args: Record<string, unknown>): Promise<L
 export async function clearResponses(owner: string, author: string): Promise<void> {
   const pk = profilePk(owner);
   const prefix = `${RESPONSE_POINTER_PREFIX}${author}#`;
-  const logIds: string[] = [];
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(
-      new QueryCommand({
-        TableName: TABLE,
-        KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-        ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-        ExpressionAttributeValues: { ":pk": pk, ":p": prefix },
-        ExclusiveStartKey: start,
-      }),
-    );
-    logIds.push(...(r.Items ?? []).map((i) => String(i.SK).slice(prefix.length)));
-    start = r.LastEvaluatedKey;
-  } while (start);
+  const logIds = (await queryPrefix(pk, prefix)).map((i) => String(i.SK).slice(prefix.length));
 
   for (const logId of logIds) {
     for (let i = 0; ; i++) {
@@ -201,7 +183,7 @@ export async function clearResponses(owner: string, author: string): Promise<voi
         }
         break;
       } catch (e) {
-        if (!cancelled(e) || i + 1 >= TRIES) throw e; // the Log changed in between: again
+        if (!isCancelled(e) || i + 1 >= TRIES) throw e; // the Log changed in between: again
       }
     }
   }
@@ -209,20 +191,8 @@ export async function clearResponses(owner: string, author: string): Promise<voi
 
 /** Distinct ids after `prefix` (up to the next #) of every item in `sub`'s partition whose SK starts with it. */
 async function idsUnder(sub: string, prefix: string): Promise<string[]> {
-  const out = new Set<string>();
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": prefix },
-      ExclusiveStartKey: start,
-    }));
-    for (const i of r.Items ?? []) out.add(String(i.SK).slice(prefix.length).split("#")[0]);
-    start = r.LastEvaluatedKey;
-  } while (start);
-  return [...out];
+  const items = await queryPrefix(profilePk(sub), prefix);
+  return [...new Set(items.map((i) => String(i.SK).slice(prefix.length).split("#")[0]))];
 }
 
 /**

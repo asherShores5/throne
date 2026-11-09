@@ -1,9 +1,9 @@
 // The caller's Profile (tickets 01, 02), at PROFILE#<sub> / PROFILE. Schema: schema/profile.graphql.
-import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { cleanDisplayName, isAvatar, isHomeZone, newProfile, type ProfileFields } from "@throne/shared";
 import { now } from "../clock";
 import { invalid } from "../errors";
-import { DIRECTORY_PK, PROFILE_SK, TABLE, ddb, directoryKey, isConditionFailed, profilePk } from "../table";
+import { DIRECTORY_PK, PROFILE_SK, TABLE, ddb, directoryKey, isCancelled, isConditionFailed, profilePk, queryPrefix } from "../table";
 import type { Ctx, ResolverModule } from "./types";
 
 export interface Profile extends ProfileFields {
@@ -107,7 +107,7 @@ export async function ensureProfile(ctx: Ctx, deviceZone: unknown): Promise<Prof
     );
     return { id: ctx.sub, ...fields, homeZoneAuto: true };
   } catch (e) {
-    if (!isConditionFailed(e) && (e as { name?: string })?.name !== "TransactionCanceledException") throw e;
+    if (!isConditionFailed(e) && !isCancelled(e)) throw e;
     const winner = await read(ctx.sub);
     if (!winner) throw e;
     return winner;
@@ -116,20 +116,8 @@ export async function ensureProfile(ctx: Ctx, deviceZone: unknown): Promise<Prof
 
 /** Every Profile id, from the directory (the Notifier's hourly Summary run). */
 export async function profileIds(): Promise<string[]> {
-  const out: string[] = [];
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk",
-      ExpressionAttributeNames: { "#pk": "PK" },
-      ExpressionAttributeValues: { ":pk": DIRECTORY_PK },
-      ExclusiveStartKey: start,
-    }));
-    for (const i of r.Items ?? []) out.push(String(i.SK).slice(profilePk("").length));
-    start = r.LastEvaluatedKey;
-  } while (start);
-  return out;
+  const prefix = profilePk("");
+  return (await queryPrefix(DIRECTORY_PK, prefix)).map((i) => String(i.SK).slice(prefix.length));
 }
 
 /** The checked fields of an updateProfile input; unknown keys (an `id`, say) are ignored. */

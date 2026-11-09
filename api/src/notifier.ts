@@ -11,14 +11,14 @@
 // Health data: it never reads Details; push text comes from shared eventPushPayload (who + what only).
 import { createHash } from "node:crypto";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
-import { DeleteCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import webpush from "web-push";
 import {
   dueSummaryWeek, eventPushPayload, homeZoneOr, isScheduledRun, parsePushEvent, readPushPrefs, summaryPushPayload,
-  type PushEvent, type PushPayload, type PushToggles,
+  PUSH_KINDS, type PushEvent, type PushKind, type PushPayload,
 } from "@throne/shared";
 import { now } from "./clock";
-import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk } from "./table";
+import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk, queryPrefix } from "./table";
 import { followersOf, hasFriendRequest, isFriend, profileCard } from "./resolvers/friend";
 import { profileIds } from "./resolvers/profile";
 import { PUSH_PREFIX, pushToggles } from "./resolvers/push";
@@ -83,22 +83,9 @@ interface Device extends PushTarget {
 }
 
 async function devicesOf(sub: string): Promise<Device[]> {
-  const out: Device[] = [];
-  let start: Record<string, unknown> | undefined;
-  do {
-    const r = await ddb().send(new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
-      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-      ExpressionAttributeValues: { ":pk": profilePk(sub), ":p": PUSH_PREFIX },
-      ExclusiveStartKey: start,
-    }));
-    for (const i of r.Items ?? []) {
-      out.push({ SK: i.SK as string, endpoint: i.endpoint as string, keys: { p256dh: i.p256dh as string, auth: i.auth as string } });
-    }
-    start = r.LastEvaluatedKey;
-  } while (start);
-  return out;
+  return (await queryPrefix(profilePk(sub), PUSH_PREFIX)).map((i) => ({
+    SK: i.SK as string, endpoint: i.endpoint as string, keys: { p256dh: i.p256dh as string, auth: i.auth as string },
+  }));
 }
 
 export interface RunSummary {
@@ -145,26 +132,25 @@ async function deliver(to: string, payload: PushPayload, opts: SendOptions, summ
 
 // ---- event pushes ----------------------------------------------------------
 
-/** Which toggle lets each event kind through (friendLogged is per Friend instead). */
-const TOGGLE: Record<Exclude<PushEvent["kind"], "friendLogged">, keyof PushToggles> = {
-  friendRequest: "friendRequests",
-  friendAccepted: "friendRequests",
-  reaction: "reactionsComments",
-  comment: "reactionsComments",
-};
-
-/** Who should get this event's push, given what's true now. */
+/** Who should get this event's push, given what's true now (shared PUSH_KINDS says what to re-check). */
 async function recipients(e: PushEvent): Promise<string[]> {
-  if (e.kind === "friendLogged") return followersOf(e.from);
-  if (e.to === e.from) return [];
+  const rule = PUSH_KINDS[e.kind];
+  if (rule.recheck === "followers") return followersOf(e.from);
+  if (!("to" in e) || e.to === e.from) return [];
   // Still true? A request may be cancelled, a Friendship ended, before this runs.
-  const still = e.kind === "friendRequest" ? await hasFriendRequest(e.to, e.from) : await isFriend(e.to, e.from);
+  const still = rule.recheck === "request" ? await hasFriendRequest(e.to, e.from) : await isFriend(e.to, e.from);
   if (!still) return [];
-  return (await pushToggles(e.to))[TOGGLE[e.kind]] ? [e.to] : [];
+  return rule.toggle && (await pushToggles(e.to))[rule.toggle] ? [e.to] : [];
 }
 
-/** A newer "Sam logged" replaces an undelivered one; other pushes each stand alone. */
-const topicFor = (e: PushEvent) => (e.kind === "friendLogged" ? "l" + createHash("sha256").update(e.from).digest("base64url").slice(0, 31) : undefined);
+/** Send options for a kind; `from` names the sender for a per-sender topic (hashed: a topic is at most 32 chars). */
+function sendOptions(kind: PushKind, from?: string): SendOptions {
+  const rule = PUSH_KINDS[kind];
+  const topic = rule.topic === "fixed" ? kind
+    : rule.topic === "sender" && from ? "l" + createHash("sha256").update(from).digest("base64url").slice(0, 31)
+    : undefined;
+  return { TTL: rule.ttl, urgency: "normal", topic };
+}
 
 export async function sendEventPush(e: PushEvent): Promise<RunSummary> {
   const summary = empty();
@@ -173,16 +159,13 @@ export async function sendEventPush(e: PushEvent): Promise<RunSummary> {
   const card = await profileCard(e.from);
   if (!card) return summary;
   const payload = eventPushPayload(e, card.displayName);
-  // A "Friend logged" is stale after a few hours; a Friend request or Reaction still matters tomorrow.
-  const opts: SendOptions = { TTL: e.kind === "friendLogged" ? 6 * 3600 : 24 * 3600, urgency: "normal", topic: topicFor(e) };
+  const opts = sendOptions(e.kind, e.from);
   for (const sub of to) await deliver(sub, payload, opts, summary);
   return summary;
 }
 
 // ---- scheduled runs (ticket 10) --------------------------------------------
 
-/** The Summary push lasts a day undelivered; a newer one replaces an older (a phone off all week). */
-const SUMMARY_PUSH: SendOptions = { TTL: 24 * 3600, urgency: "normal", topic: "summary" };
 
 /**
  * The hourly run: for each Profile (the directory) whose Home zone is past 08:00 on a Monday, build last
@@ -210,7 +193,7 @@ async function runScheduled(): Promise<RunSummary> {
       }
       if (claim !== "stored") continue;
       summary.summaries++;
-      if (readPushPrefs(p.pushPrefs).summary) await deliver(sub, summaryPushPayload(), SUMMARY_PUSH, summary);
+      if (readPushPrefs(p.pushPrefs)[PUSH_KINDS.summary.toggle!]) await deliver(sub, summaryPushPayload(), sendOptions("summary"), summary);
     } catch (e) {
       // No ids, no numbers: just that one Profile's Summary failed (the next hourly run that Monday retries).
       console.error("summary failed", (e as Error)?.name);

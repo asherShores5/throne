@@ -21,7 +21,7 @@ async function forgetAndSignOut(username: string | undefined) {
   await releaseLocally();
   sessionStorage.setItem(DELETED_NOTICE, "1");
   navigate("/", { replace: true });
-  await signOut(); // its RevokeToken fails quietly: the user is gone
+  await signOut(); // its RevokeToken fails quietly: the Profile and its username are gone
 }
 
 /** Delete the signed-in Profile for good. Rejects (and changes nothing here) if the server couldn't finish. */
