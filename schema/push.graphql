@@ -1,0 +1,50 @@
+# Push notifications (ticket 09). Resolvers: api/src/resolvers/push.ts; rules: shared/src/push.ts.
+# Plain comments, not "descriptions": AppSync has rejected described types before.
+
+# Which pushes the caller gets. Per Profile; each device turns push on or off for itself.
+type PushPrefs {
+  # The weekly Summary. On for a new Profile.
+  summary: Boolean!
+  # A Friend request arrives, or one the caller sent is accepted. Off for a new Profile.
+  friendRequests: Boolean!
+  # A Friend reacts to or comments on one of the caller's Logs. Off for a new Profile.
+  reactionsComments: Boolean!
+  # Friends whose new Logs push to the caller ("Sam logged"). Empty for a new Profile; ending a
+  # Friendship takes the Friend off.
+  friendLogged: [ID!]!
+}
+
+# Only the toggles sent change; friendLogged, if sent, is the whole list (ids that aren't Friends are left out).
+input PushPrefsInput {
+  summary: Boolean
+  friendRequests: Boolean
+  reactionsComments: Boolean
+  friendLogged: [ID!]
+}
+
+# A browser's Web Push subscription for this device.
+input PushSubscriptionInput {
+  # A UUID the device keeps, so re-enabling replaces its own record.
+  deviceId: ID!
+  # Must be a known push service over https (Apple, Google, Mozilla, Microsoft).
+  endpoint: String!
+  p256dh: String!
+  auth: String!
+}
+
+type PushDevice {
+  deviceId: ID!
+  enabled: Boolean!
+}
+
+extend type Query {
+  pushPrefs: PushPrefs!
+}
+
+extend type Mutation {
+  updatePushPrefs(input: PushPrefsInput!): PushPrefs!
+  # Turn push on for this device (at most 10 devices per Profile; re-saving a device always works).
+  putPushSubscription(input: PushSubscriptionInput!): PushDevice!
+  # Turn push off for this device. Already off is fine.
+  deletePushSubscription(deviceId: ID!): PushDevice!
+}

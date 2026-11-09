@@ -23,9 +23,32 @@ export const CALLERS = { A: caller("a"), B: caller("b"), C: caller("c"), D: call
 
 process.env.TABLE_NAME = process.env.TABLE_NAME ?? "test-table";
 
-const { handler, setDocClient } = await import("../handler");
+const { handler, setDocClient, setEventSink } = await import("../handler");
 const { QUERY_FIELDS } = await import("../resolvers");
 const { handler: preSignUp } = await import("../preSignUp");
+const notifier = await import("../notifier");
+
+/** One push the fake push service accepted. */
+export interface SentPush {
+  endpoint: string;
+  payload: string;
+  opts: import("../notifier").SendOptions;
+}
+
+// Events the API handed off (instead of invoking the Notifier Lambda), and the fake push service.
+let events: unknown[] = [];
+let eventsBroken = false;
+setEventSink(async (e) => {
+  if (eventsBroken) throw new Error("Lambda is down");
+  events.push(structuredClone(e));
+});
+let pushes: SentPush[] = [];
+const failing = new Map<string, number>();
+notifier.setPushSender(async (sub, payload, opts) => {
+  const status = failing.get(sub.endpoint);
+  if (status) throw Object.assign(new Error(`push service said ${status}`), { statusCode: status });
+  pushes.push({ endpoint: sub.endpoint, payload, opts });
+});
 
 export interface SignUpOptions {
   /** Where the web app put the token: ClientMetadata (what it sends) or ValidationData. */
@@ -78,8 +101,36 @@ export function harness() {
   return {
     ...CALLERS,
     db,
-    /** Empty the table. Call from beforeEach. */
-    reset: () => db.reset(),
+    /** Empty the table (and the push bookkeeping below). Call from beforeEach. */
+    reset: () => {
+      db.reset();
+      events = [];
+      pushes = [];
+      failing.clear();
+      eventsBroken = false;
+    },
+    /** The push events the API handed to the Notifier so far (not yet delivered). */
+    events: () => events,
+    /** Run the real Notifier on every event so far (in order), as Lambda would; the summary of each run. */
+    deliver: async () => {
+      const todo = events;
+      events = [];
+      const out = [];
+      for (const e of todo) out.push(await notifier.handler(e));
+      return out;
+    },
+    /** Invoke the Notifier with any event. */
+    notify: (e: unknown) => notifier.handler(e),
+    /** Pushes the fake push service accepted since the last call. */
+    takePushes: () => {
+      const out = pushes;
+      pushes = [];
+      return out;
+    },
+    /** Make the push service answer `status` for this endpoint from now on. */
+    failPush: (endpoint: string, status: number) => void failing.set(endpoint, status),
+    /** Make every hand-off to the Notifier fail (Lambda unreachable). */
+    breakEvents: () => void (eventsBroken = true),
     event: appSyncEvent,
     /** Invoke the handler as `who`. Rejects with the same Error the client would see. */
     call: (who: Caller, fieldName: string, args: Record<string, unknown> = {}): Promise<any> => handler(appSyncEvent(who, fieldName, args)),
