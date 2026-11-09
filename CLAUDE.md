@@ -50,7 +50,7 @@ code and UI.
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
   new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
-  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `push.ts`: push prefs defaults/edits, the push-service endpoint allowlist + 10-device cap, the PushEvent the API hands the Notifier, push text (`eventPushPayload`, no Details) and tap links (`pushLinks`); `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `push.ts`: push prefs defaults/edits, the push-service endpoint allowlist + 10-device cap, the PushEvent the API hands the Notifier, push text (`eventPushPayload`, no Details) and tap links (`pushLinks`); `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji; `summary.ts`: when a Summary is due (`dueSummaryWeek`: Monday from 08:00 in the Home zone, for last Monday-Sunday), one person's numbers (`personWeek`), the Awards (`weekAwards`, thresholds as constants; Early bird/Night owl need 3+ Days, a default); `push.ts` also has `summaryPushPayload` (no numbers) and `SCHEDULED_RUN`, the hourly schedule's event), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -60,7 +60,8 @@ code and UI.
   document client seam), `resolvers/<entity>.ts` (one `ResolverModule` per entity, merged in
   `resolvers/index.ts`). `resolvers/profile.ts` has `ensureProfile(ctx, zone)`, which later resolvers can
   call to get the caller's Profile (it also moves the Home zone with the device unless the Profile pinned one;
-  `updateProfile` edits it). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
+  `updateProfile` edits it; the first call also writes the Profile's directory entry `PROFILES` / `PROFILE#<sub>` in the
+  same transaction, and `profileIds()` lists them, so the hourly run needs no Scan; ticket 11 must delete the entry too). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
   Profile (`INVITESLOT#1-3`, claimed in a transaction, so the cap holds under races). `preSignUp.ts`: the Cognito
   pre-sign-up trigger (its own Lambda) that spends an open Invite with one conditional write. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
   Profile is one key range, `myLogs(from, to)`; a Friend's the same way via `friendLogs(friend, from, to)` behind `requireFriend`), plus `LOGID#<id>` (id lookup + idempotent create) and
@@ -84,7 +85,11 @@ code and UI.
   `PUSH#<deviceId>`. `events.ts`: `emit(PushEvent)` after a write commits = async Lambda invoke of the Notifier
   (ids only; never fails the write; no `NOTIFIER_FUNCTION` = no-op). `notifier.ts`: its own Lambda (CJS for
   web-push): re-checks the Friendship/request, applies prefs, sends to every device, prunes 404/410;
-  `runScheduled()` is where ticket 10's hourly Summary goes. `vapid.ts` + `vapidKeysProvider.ts`: the VAPID
+  `runScheduled()` is the hourly run (only for the `SCHEDULED_RUN` event; anything else unknown is ignored): for each
+  Profile in the directory that `dueSummaryWeek` says is due, `resolvers/summary.ts` builds the Summary (them + current
+  Friends, each person's Logs on their own Days via `logItems`, names/Avatars snapshotted) and stores it at
+  `SUMMARY#<weekStart>` with `attribute_not_exists`: that write is the claim, and only the winning run pushes (if
+  the Profile's Summary push is on). `summaries` (Query) reads only the caller's own, newest first (104 max). `vapid.ts` + `vapidKeysProvider.ts`: the VAPID
   key custom resource (SSM `/throne/vapid/*`, never overwritten).
 - `api/src/testing/`: `harness.ts` (call the real handler as Profiles `A`-`D` against the fake table; it also
   captures push events, `h.deliver()` runs the real Notifier on them with a fake push service, `h.takePushes()`) and
@@ -96,12 +101,15 @@ code and UI.
   config). An AppSync resolver is created for every Query/Mutation field in the composed schema, so a new
   field needs only its schema line and its resolver. The Lambda gets Get/Put/Update/Delete/Query on the
   table and `lambda:InvokeFunction` on the Notifier only, no SSM (asserted in `infra/test/stacks.test.ts`). The
-  Notifier gets Get/Query/Delete on the table and `ssm:GetParameter` on the two VAPID parameters; its async
-  invokes are never retried. `config.json` gets `vapidPublicKey` from the VapidKeys resource.
+  Notifier gets Get/Query/Delete/Put on the table (Put only for the conditional Summary write) and `ssm:GetParameter`
+  on the two VAPID parameters; its async invokes are never retried. An EventBridge Scheduler schedule (`NotifierHourly`,
+  cron minute 0 UTC, retryAttempts 0, input `SCHEDULED_RUN`) invokes it through a role that may only invoke it. `config.json` gets `vapidPublicKey` from the VapidKeys resource.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
-  `route.ts` (paths `/`, `/calendar` (also `?who=<sub>&day=<Day>` from a push), `/friends`, `/settings`, `/invite#<token>`; `useSearch`), `views/` (`Login`, `Home`, `Join` = Invite landing
-  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `Calendar` (the Avatar row: Me, each Friend, Everyone; shown once there's a Friend), `MonthCalendar` (one person's heat month, or the combined grid with a count per person in Avatar colors from shared `combinedColors`), `monthLogs.ts` (`useMonthLogs`: my Logs from the outbox store via `refreshLogs`/`useLogs`, so pending ones show; a Friend's via `friendLogs`, never cached; one range query per person), `MonthGrid` (cell content from a `day()` callback), `DaySheet` (one group per person; only my Logs editable; Reactions/Comments under each Log via `log/Responses.tsx`, online only, and a Day marker when there are some), `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  `route.ts` (paths `/`, `/calendar` (also `?who=<sub>&day=<Day>` from a push), `/friends`, `/settings`, `/summary`, `/invite#<token>`; `useSearch`), `views/` (`Login`, `Home`, `Join` = Invite landing
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `Calendar` (the Avatar row: Me, each Friend, Everyone; shown once there's a Friend), `MonthCalendar` (one person's heat month, or the combined grid with a count per person in Avatar colors from shared `combinedColors`), `monthLogs.ts` (`useMonthLogs`: my Logs from the outbox store via `refreshLogs`/`useLogs`, so pending ones show; a Friend's via `friendLogs`, never cached; one range query per person), `MonthGrid` (cell content from a `day()` callback), `DaySheet` (one group per person; only my Logs editable; Reactions/Comments under each Log via `log/Responses.tsx`, online only, and a Day marker when there are some), `refresh.ts` (focus + pull-to-refresh)). `views/summary/`: `SummaryCard` (one Summary; `compact` for Home), `SummaryScreen` (`/summary`, where the Summary
+  push lands: latest in full, then past ones newest first) and `LatestSummaryCard` (under the Log list on Home);
+  online only, `api/summary.ts` with the `SUMMARY` selection in `api/selections.ts`. `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`; it also shows pushes and opens their link (`src/deepLink.ts`: `notificationFor`, `clickPlan`,
   the `navigate` message App.tsx follows; no imports, the worker build takes plain modules). Push glue:
   `notifications.ts` (enable inside the click handler, disable, sign-out `releaseThisDevice`), pure `push.ts`,
@@ -109,7 +117,7 @@ code and UI.
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`, `push.ts`; `open(u, { serviceWorkers: true, fakePush: true })` gives a stand-in push service); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`, `reactions.ts`, `push.ts`, `summary.ts` (`runSchedule(at)` in `backend.ts` runs the real Notifier's hourly run); `open(u, { serviceWorkers: true, fakePush: true })` gives a stand-in push service); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
