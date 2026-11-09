@@ -6,6 +6,11 @@ import { buildApp } from "../lib/app";
 
 // One synth for the whole file: bundling the API Lambda with esbuild is the slow part.
 let app: Template;
+const preSignUpId = () => {
+  const ids = Object.keys(app.findResources("AWS::Lambda::Function")).filter((id) => id.startsWith("PreSignUpFn"));
+  expect(ids).toHaveLength(1);
+  return ids[0];
+};
 beforeAll(() => {
   app = Template.fromStack(buildApp(new App(), { region: "us-west-1" }).app);
 }, 120_000);
@@ -38,25 +43,49 @@ describe("data", () => {
     expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
   });
 
-  it("one Lambda handler for the API (plus CDK's own log-retention helpers, if any)", () => {
-    const fns = Object.values(app.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Environment?.Variables?.TABLE_NAME);
-    expect(fns).toHaveLength(1);
-    expect(fns[0].Properties.Runtime).toBe("nodejs22.x");
-    expect(fns[0].Properties.Architectures).toEqual(["arm64"]);
+  it("one Lambda handler for the API and one pre-sign-up trigger (plus CDK's own helpers, if any)", () => {
+    const fns = Object.entries(app.findResources("AWS::Lambda::Function")).filter(([, f]) => f.Properties.Environment?.Variables?.TABLE_NAME);
+    expect(fns.map(([id]) => id.replace(/[0-9A-F]{8}$/, "")).sort()).toEqual(["ApiFn", "PreSignUpFn"]);
+    for (const [, f] of fns) {
+      expect(f.Properties.Runtime).toBe("nodejs22.x");
+      expect(f.Properties.Architectures).toEqual(["arm64"]);
+    }
   });
 });
 
 describe("auth", () => {
-  it("no self sign-up yet (ticket 02 opens it behind the Invite trigger); password and passkey sign-in", () => {
-    app.hasResourceProperties("AWS::Cognito::UserPool", {
-      AdminCreateUserConfig: { AllowAdminCreateUserOnly: true },
-      UserPoolTier: "ESSENTIALS",
-    });
+  it("self sign-up is on only together with the Invite pre-sign-up trigger; password and passkey sign-in", () => {
+    // Self sign-up without the trigger would let anyone make a Profile: assert both in one place.
     const [pool] = Object.values(app.findResources("AWS::Cognito::UserPool"));
+    expect(pool.Properties.AdminCreateUserConfig.AllowAdminCreateUserOnly).toBe(false);
+    const trigger = pool.Properties.LambdaConfig?.PreSignUp;
+    expect(trigger).toEqual({ "Fn::GetAtt": [preSignUpId(), "Arn"] });
+    expect(pool.Properties.UserPoolTier).toBe("ESSENTIALS");
     expect([...pool.Properties.Policies.SignInPolicy.AllowedFirstAuthFactors].sort()).toEqual(["PASSWORD", "WEB_AUTHN"]);
     expect(pool.Properties.WebAuthnRelyingPartyID).toBe("throne.ashershores.com");
     expect(pool.Properties.WebAuthnUserVerification).toBe("required");
     expect(pool.Properties.Policies.PasswordPolicy.MinimumLength).toBeGreaterThanOrEqual(16);
+    // Nothing to confirm by email or phone: the Invite is the proof (the trigger auto-confirms).
+    expect(pool.Properties.AutoVerifiedAttributes ?? []).toEqual([]);
+  });
+
+  it("the pre-sign-up trigger runs the Invite check with only the table name and only UpdateItem on the table", () => {
+    const fn = app.findResources("AWS::Lambda::Function")[preSignUpId()];
+    expect(Object.keys(fn.Properties.Environment.Variables)).toEqual(["TABLE_NAME"]);
+    expect(fn.Properties.Handler).toMatch(/handler$/);
+    const roleId = fn.Properties.Role["Fn::GetAtt"][0];
+    const statements = Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement);
+    expect(statements.map((st: any) => st.Action)).toEqual(["dynamodb:UpdateItem"]);
+    const [tableId] = Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"));
+    expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
+    // Only this pool may invoke it.
+    app.hasResourceProperties("AWS::Lambda::Permission", {
+      FunctionName: { "Fn::GetAtt": [preSignUpId(), "Arn"] },
+      Principal: "cognito-idp.amazonaws.com",
+      SourceArn: { "Fn::GetAtt": [Object.keys(app.findResources("AWS::Cognito::UserPool"))[0], "Arn"] },
+    });
   });
 
   it("the web client signs in through USER_AUTH (password or passkey) and refresh only", () => {

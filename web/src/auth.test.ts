@@ -227,3 +227,34 @@ describe("signing out", () => {
     expect(relaunched.hasPasskeyHere()).toBe(false);
   });
 });
+
+describe("sign-up with an Invite", () => {
+  const TOKEN = "AAECAwQFBgcICQoLDA0ODw";
+
+  it("calls SignUp with the Invite token as ClientMetadata, then signs in with the new password", async () => {
+    cognito.SignUp = [{ status: 200, body: { UserConfirmed: true, UserSub: "sub-new" } }];
+    cognito.InitiateAuth = [ok(tokens(1, "refresh-1"))];
+    const auth = await launch();
+    await auth.signUpWithInvite(TOKEN, "NewBie", "Correct horse 42");
+    expect(calls[0]).toEqual({
+      target: "SignUp",
+      body: { ClientId: "client-1", Username: "newbie", Password: "Correct horse 42", ClientMetadata: { inviteToken: TOKEN } },
+    });
+    expect(calls[1].body.AuthParameters).toMatchObject({ USERNAME: "newbie", PASSWORD: "Correct horse 42" });
+    expect(auth.isSignedIn()).toBe(true);
+  });
+
+  it("an Invite the trigger refuses is an InviteRefusedError and signs nobody in", async () => {
+    cognito.SignUp = [{ status: 400, body: { __type: "UserLambdaValidationException", message: "PreSignUp failed with error Sign-up failed. Ask for a new Invite.." } }];
+    const auth = await launch();
+    const err = await auth.signUpWithInvite(TOKEN, "newbie", "Correct horse 42").catch((e) => e);
+    expect(err).toBeInstanceOf(auth.InviteRefusedError);
+    expect(auth.isSignedIn()).toBe(false);
+  });
+
+  it("a taken username says so plainly", async () => {
+    cognito.SignUp = [{ status: 400, body: { __type: "UsernameExistsException", message: "User already exists" } }];
+    const auth = await launch();
+    await expect(auth.signUpWithInvite(TOKEN, "asher", "Correct horse 42")).rejects.toThrow("That username is taken. Pick another.");
+  });
+});

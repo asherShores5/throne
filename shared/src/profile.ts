@@ -38,6 +38,29 @@ export function isHomeZone(z: unknown): z is string {
 
 export const homeZoneOr = (z: unknown): string => (isHomeZone(z) ? z : DEFAULT_HOME_ZONE);
 
+/**
+ * A Display name as stored: trimmed, 1 to DISPLAY_NAME_MAX characters (an emoji counts as one), no
+ * control characters. Undefined if it can't be one.
+ */
+export function cleanDisplayName(n: unknown): string | undefined {
+  if (typeof n !== "string") return undefined;
+  const t = n.trim();
+  const len = [...t].length;
+  if (len < 1 || len > DISPLAY_NAME_MAX || /\p{Cc}/u.test(t)) return undefined;
+  return t;
+}
+
+/** An Avatar from the fixed choices: an emoji from AVATAR_EMOJI on a color from AVATAR_COLORS, nothing else. */
+export function isAvatar(a: unknown): a is Avatar {
+  if (!a || typeof a !== "object") return false;
+  const { emoji, color, ...rest } = a as Record<string, unknown>;
+  return (
+    Object.keys(rest).length === 0 &&
+    (AVATAR_EMOJI as readonly unknown[]).includes(emoji) &&
+    (AVATAR_COLORS as readonly unknown[]).includes(color)
+  );
+}
+
 /** A brand-new Profile: placeholder Display name, default Avatar, Home zone from the device. */
 export function newProfile(deviceZone: unknown): ProfileFields {
   return {
