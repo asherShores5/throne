@@ -1,7 +1,7 @@
 // Calendar (GLOSSARY: Calendar, Day, Log): the pure parts of the month view. Expected values are worked
 // by hand from real calendars (Nov 2026 starts on a Sunday, Feb 2027 on a Monday).
 import { describe, expect, it } from "vitest";
-import { addMonths, dayCounts, formatAverage, heatLevel, monthStats, isMonth, monthGrid, monthOf, monthRange } from "./calendar";
+import { addMonths, combinedColors, dayCounts, formatAverage, heatLevel, monthStats, isMonth, monthGrid, monthOf, monthRange } from "./calendar";
 
 describe("heat level: how dark a Day is", () => {
   it("is blank with no Logs, then one shade per Log up to 4, and 4 for anything more", () => {
@@ -74,5 +74,34 @@ describe("months: which month a Day is in, moving between months, and the Days t
   it("accepts only YYYY-MM months", () => {
     expect(["2026-11", "2026-01", "1999-12"].map(isMonth)).toEqual([true, true, true]);
     expect(["2026-13", "2026-00", "2026-1", "26-11", "2026-11-01", 202611, undefined].map(isMonth)).toEqual([false, false, false, false, false, false, false]);
+  });
+});
+
+describe("combined grid colors: one per visible Profile, clashes told apart", () => {
+  const av = (color: string, emoji = "🚽") => ({ color, emoji });
+
+  it("keeps each Avatar's own color when they all differ, and shows no emoji", () => {
+    expect(combinedColors([av("#7c5cff"), av("#e8590c", "🦆"), av("#f0b400", "🐸")])).toEqual([
+      { color: "#7c5cff", text: "#000000" },
+      { color: "#e8590c", text: "#000000" },
+      { color: "#f0b400", text: "#000000" },
+    ]);
+  });
+
+  it("gives the later Profile with the same color an alternate shade plus its emoji; the first keeps its own", () => {
+    // #7c5cff mixed 40% toward black: 124*0.6=74 (4a), 92*0.6=55 (37), 255*0.6=153 (99).
+    expect(combinedColors([av("#7c5cff"), av("#2b8a3e"), av("#7c5cff", "🦆")])).toEqual([
+      { color: "#7c5cff", text: "#000000" },
+      { color: "#2b8a3e", text: "#000000" },
+      { color: "#4a3799", text: "#ffffff", emoji: "🦆" },
+    ]);
+  });
+
+  it("a third and fourth of one color each get their own shade (darker, lighter, darker still)", () => {
+    // #868e96 40% toward black: 80 (50), 85 (55), 90 (5a). 45% toward white: 134+0.45*121=188 (bc),
+    // 142+0.45*113=193 (c1), 150+0.45*105=197 (c5). 65% toward black: 47 (2f), 50 (32), 53 (35).
+    const out = combinedColors([av("#868e96"), av("#868e96", "🦆"), av("#868e96", "🐸"), av("#868e96", "🐙")]);
+    expect(out.map((c) => c.color)).toEqual(["#868e96", "#50555a", "#bcc1c5", "#2f3235"]);
+    expect(out.map((c) => c.emoji)).toEqual([undefined, "🦆", "🐸", "🐙"]);
   });
 });

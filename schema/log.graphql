@@ -42,6 +42,9 @@ input LogEdit {
 extend type Query {
   # The caller's Logs on the Days from..to (YYYY-MM-DD, inclusive, at most 42 Days), oldest first.
   myLogs(from: String!, to: String!): [Log!]!
+  # A Friend's Logs on the Days from..to (same rules), on the Friend's own Days, with every Detail.
+  # Anyone who isn't the caller's Friend right now gets NotFound, the same as an id that doesn't exist.
+  friendLogs(friend: ID!, from: String!, to: String!): [Log!]!
 }
 
 extend type Mutation {

@@ -50,7 +50,7 @@ code and UI.
 
 - `shared/src/`: pure domain logic, one file per area (`profile.ts`: Avatar choices, Home zone check,
   new-Profile defaults, Display name/Avatar checks; `invite.ts`: token format, 7-day life, cap of 3, link;
-  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
+  `signUp.ts`: username/password form rules; `log.ts`: Details rules, time rules, Day from instant + Log zone and back, Log sort keys; `calendar.ts`: heat levels, Monday-first month grid, month range, Day counts, monthly total + daily average; `friend.ts`: Friend code alphabet/format/parse, cap of 3, 10 sends a rolling day; `calendar.ts` also has `combinedColors`: a clashing Avatar color gets an alternate shade plus the emoji), each re-exported from `index.ts`. New pure logic (Day bucketing, heat levels,
   Summary math, Awards, Friend codes, limits) goes here with a vitest test.
 - `schema/`: the GraphQL schema split per entity. `base.graphql` declares `Query` and `Mutation`; each
   `<entity>.graphql` adds fields with `extend type Query/Mutation { ... }`. `schema/compose.ts` merges them
@@ -63,7 +63,7 @@ code and UI.
   `updateProfile` edits it). `resolvers/invite.ts`: Invites at `INVITE#<token>` / `INVITE`, held in 3 places per
   Profile (`INVITESLOT#1-3`, claimed in a transaction, so the cap holds under races). `preSignUp.ts`: the Cognito
   pre-sign-up trigger (its own Lambda) that spends an open Invite with one conditional write. `resolvers/log.ts`: Logs at `LOG#<Day>#<instant>#<id>` (a month of one
-  Profile is one key range, `myLogs(from, to)`), plus `LOGID#<id>` (id lookup + idempotent create) and
+  Profile is one key range, `myLogs(from, to)`; a Friend's the same way via `friendLogs(friend, from, to)` behind `requireFriend`), plus `LOGID#<id>` (id lookup + idempotent create) and
   `LOGDAY#<Day>` (count for the 50-a-Day cap), always written together in one transaction. `clock.ts`: server
   time for the time rules (seam for e2e). `resolvers/friend.ts`: Friend codes (`FRIENDCODE#<code>` lookup plus
   the Profile's `FRIENDCODE` pointer), Friend requests (`FRIENDREQ#IN#<from>` under the receiver and
@@ -84,12 +84,12 @@ code and UI.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
   `route.ts` (paths `/`, `/calendar`, `/friends`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
-  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `PersonCalendar` (one person's month from an injected `loadLogs(from, to)`, so ticket 07 can show a Friend read-only), `MonthGrid` (cell content from a `day()` callback, for the combined grid), `DaySheet`, `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `Calendar` (the Avatar row: Me, each Friend, Everyone; shown once there's a Friend), `MonthCalendar` (one person's heat month, or the combined grid with a count per person in Avatar colors from shared `combinedColors`), `monthLogs.ts` (`useMonthLogs`: my Logs from the outbox store via `refreshLogs`/`useLogs`, so pending ones show; a Friend's via `friendLogs`, never cached; one range query per person), `MonthGrid` (cell content from a `day()` callback), `DaySheet` (one group per person; only my Logs editable), `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`, `friendsCalendar.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you

@@ -1,7 +1,7 @@
 // Logs (ticket 03). Schema: schema/log.graphql; rules: shared/src/log.ts. Items, all in the owner's
 // partition PROFILE#<sub>:
 //   LOG#<Day>#<instant ISO>#<id>   the Log. Sorted by Day then instant, so a month is one key range
-//                                  (myLogs; ticket 05's Calendar and 07's Friend view read it the same way).
+//                                  (myLogs for the caller, friendLogs for a Friend).
 //   LOGID#<id>                     { sk }: finds a Log by its id, and makes a retried create idempotent.
 //   LOGDAY#<Day>                   { n }: Logs on that Day, so the 50-a-Day cap holds under races.
 // Every write that touches more than one of these is a single transaction.
@@ -13,6 +13,7 @@ import {
 import { now } from "../clock";
 import { UserError, invalid } from "../errors";
 import { TABLE, ddb, isConditionFailed, profilePk } from "../table";
+import { requireFriend } from "./friend";
 import { ensureProfile } from "./profile";
 import type { Ctx, ResolverModule } from "./types";
 
@@ -215,7 +216,8 @@ async function deleteLog(ctx: Ctx, input: Record<string, unknown>): Promise<stri
   return id;
 }
 
-async function myLogs(ctx: Ctx, { from, to }: Record<string, unknown>): Promise<Log[]> {
+/** One Profile's Logs on the Days from..to: one key range in their partition (check the caller may see them first). */
+async function logsOf(sub: string, from: unknown, to: unknown): Promise<Log[]> {
   if (!isDay(from) || !isDay(to)) throw invalid("from and to are Days (YYYY-MM-DD).");
   if (to < from) throw invalid("to is before from.");
   if (addDays(from, MAX_RANGE_DAYS - 1) < to) throw invalid(`At most ${MAX_RANGE_DAYS} Days at a time.`);
@@ -228,7 +230,7 @@ async function myLogs(ctx: Ctx, { from, to }: Record<string, unknown>): Promise<
         TableName: TABLE,
         KeyConditionExpression: "#pk = :pk AND #sk BETWEEN :from AND :to",
         ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
-        ExpressionAttributeValues: { ":pk": profilePk(ctx.sub), ":from": range.from, ":to": range.to },
+        ExpressionAttributeValues: { ":pk": profilePk(sub), ":from": range.from, ":to": range.to },
         ExclusiveStartKey: start,
       }),
     );
@@ -238,8 +240,24 @@ async function myLogs(ctx: Ctx, { from, to }: Record<string, unknown>): Promise<
   return items.map(out);
 }
 
+const friendNotFound = () => new UserError("NotFound", "No such Friend.");
+
+/**
+ * A Friend's Logs (ticket 07), all the way back, on the Friend's own Days. Anyone who isn't the caller's
+ * Friend right now (yourself, a stranger, an ended Friendship, junk) gets the same NotFound, checked before
+ * anything else so not even the range rules answer a stranger.
+ */
+async function friendLogs(ctx: Ctx, { friend, from, to }: Record<string, unknown>): Promise<Log[]> {
+  if (typeof friend !== "string") throw friendNotFound();
+  await requireFriend(ctx, friend, friendNotFound);
+  return logsOf(friend, from, to);
+}
+
 export const log: ResolverModule = {
-  Query: { myLogs },
+  Query: {
+    myLogs: (ctx, { from, to }) => logsOf(ctx.sub, from, to),
+    friendLogs,
+  },
   Mutation: {
     createLog: (ctx, { log }) => createLog(ctx, (log ?? {}) as Record<string, unknown>),
     updateLog: (ctx, { log }) => updateLog(ctx, (log ?? {}) as Record<string, unknown>),
