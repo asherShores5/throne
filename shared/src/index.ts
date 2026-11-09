@@ -3,3 +3,4 @@ export * from "./profile";
 export * from "./invite";
 export * from "./log";
 export * from "./signUp";
+export * from "./friend";
