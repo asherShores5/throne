@@ -226,6 +226,19 @@ describe("signing out", () => {
     expect(relaunched.isSignedIn()).toBe(false);
     expect(relaunched.hasPasskeyHere()).toBe(false);
   });
+
+  it("drops this Profile's copy of their Logs and Profile, keeping only unsent Log writes", async () => {
+    const auth = await signedIn();
+    const u = auth.currentUsername()!;
+    localStorage.setItem(`throne.logs.v1:${u}`, "[1]");
+    localStorage.setItem(`throne.me.v1:${u}`, "{}");
+    localStorage.setItem(`throne.outbox.v1:${u}`, "[2]");
+    cognito.RevokeToken = [{ status: 200, body: {} }];
+    await auth.signOut();
+    expect(localStorage.getItem(`throne.logs.v1:${u}`)).toBeNull();
+    expect(localStorage.getItem(`throne.me.v1:${u}`)).toBeNull();
+    expect(localStorage.getItem(`throne.outbox.v1:${u}`)).toBe("[2]");
+  });
 });
 
 describe("sign-up with an Invite", () => {

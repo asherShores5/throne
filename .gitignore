@@ -7,3 +7,4 @@ cdk.out/
 .env*
 web/public/config.json
 .claude/worktrees/
+cdk-outputs.json

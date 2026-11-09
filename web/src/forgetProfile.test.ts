@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forgetProfileHere } from "./forgetProfile";
+import { forgetOnSignOut, forgetProfileHere } from "./forgetProfile";
 import type { KeyValue } from "./pushDevice";
 
 function memory(init: Record<string, string>): KeyValue & { all(): Record<string, string> } {
@@ -33,5 +33,16 @@ describe("after Delete Profile, this device forgets the Profile", () => {
     const store = memory({ "throne.lastUser": "sam" });
     forgetProfileHere(store, "alex");
     expect(store.all()).toEqual({ "throne.lastUser": "sam" });
+  });
+});
+
+describe("after Sign out (hand the phone to someone), this device keeps no readable copy", () => {
+  it("drops their Logs copy and cached Profile; keeps only Log writes not yet sent, and the one-tap username", () => {
+    const store = memory({
+      "throne.logs.v1:alex": "[1]", "throne.outbox.v1:alex": "[2]", "throne.me.v1:alex": "{}",
+      "throne.logs.v1:sam": "[3]", "throne.lastUser": "alex",
+    });
+    forgetOnSignOut(store, "alex");
+    expect(store.all()).toEqual({ "throne.outbox.v1:alex": "[2]", "throne.logs.v1:sam": "[3]", "throne.lastUser": "alex" });
   });
 });

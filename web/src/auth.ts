@@ -5,6 +5,7 @@
 // runs out.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { getConfig } from "./config";
+import { forgetOnSignOut } from "./forgetProfile";
 import { HAS_PASSKEY, LAST_USER } from "./storageKeys";
 
 interface Tokens {
@@ -218,8 +219,11 @@ export async function freshTokens(): Promise<Tokens> {
 
 export async function signOut() {
   const t = tokens;
+  const u = currentUsername();
   // A device-wide flag that would mislead the next person on a shared device.
   localStorage.removeItem(HAS_PASSKEY);
   save(null);
+  // After save(null): sync/logs.ts has switched away from this user, so nothing writes the copy back.
+  if (u) forgetOnSignOut(localStorage, u);
   if (t) await cognito("RevokeToken", { Token: t.refreshToken, ClientId: getConfig().clientId }).catch(() => {});
 }
