@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { BRISTOL_TYPES, addDays, localTime } from "@throne/shared";
 import type { Log } from "../../api/log";
+import type { ShownLog } from "../../sync/pending";
 import { BristolIcon } from "./BristolIcon";
 import { flagLabel } from "./LogEditor";
 
@@ -13,7 +14,7 @@ export function dayLabel(day: string, today: string): string {
 }
 
 export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, canDelete = () => true, oldestFirst = false }: {
-  logs: Log[];
+  logs: ShownLog[];
   today: string;
   onEdit: (l: Log) => void;
   onDelete: (l: Log) => Promise<void>;
@@ -36,7 +37,7 @@ export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, c
               const time = localTime(Date.parse(l.instant), l.logZone);
               const bristol = BRISTOL_TYPES.find((b) => b.type === l.bristolType);
               return (
-                <li key={l.id} className="log-item" aria-label={`Log at ${time}`}>
+                <li key={l.id} className={`log-item${l.pending ? " pending" : ""}`} aria-label={`Log at ${time}${l.pending ? ", waiting to sync" : ""}`}>
                   <span className="time">{time}</span>
                   <span className="what">
                     {bristol && (
@@ -45,6 +46,7 @@ export function LogList({ logs, today, onEdit, onDelete, canEdit = () => true, c
                     {l.duration !== undefined && <span className="tag">{l.duration} min</span>}
                     {l.flags.map((f) => <span key={f} className="tag flag">{flagLabel(f)}</span>)}
                     {l.note && <span className="note">{l.note}</span>}
+                    {l.pending && <span className="tag pending-tag" title="Saved on this phone; not on the server yet">Waiting to sync</span>}
                   </span>
                   {confirming === l.id ? (
                     <span className="confirm">

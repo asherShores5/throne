@@ -49,5 +49,4 @@ export async function myLogs(from: string, to: string): Promise<Log[]> {
   return r.myLogs.map(clean);
 }
 
-/** The server's "<Type>: message" error, without the type, for showing to the Profile. */
-export const errorText = (e: unknown) => String((e as Error)?.message ?? e).replace(/^(ValidationError|NotFound|Forbidden|Unavailable): /, "");
+export { errorText } from "./errors";

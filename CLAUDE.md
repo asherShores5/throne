@@ -84,12 +84,12 @@ code and UI.
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
   `route.ts` (paths `/`, `/calendar`, `/friends`, `/settings`, `/invite#<token>`), `views/` (`Login`, `Home`, `Join` = Invite landing
-  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `PersonCalendar` (one person's month from an injected `loadLogs(from, to)`, so ticket 07 can show a Friend read-only), `MonthGrid` (cell content from a `day()` callback, for the combined grid), `DaySheet`, `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  page, `Settings`, `AvatarPicker`, styles in `views/profile.css`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet; `views/calendar/`: `PersonCalendar` (one person's month from an injected `loadLogs(from, to)`, so ticket 07 can show a Friend read-only), `MonthGrid` (cell content from a `day()` callback, for the combined grid), `DaySheet`, `refresh.ts` (focus + pull-to-refresh)). `views/friends/`: `FriendsPanel` (Friend code, Add a Friend, requests, Friends list with an inline end-Friendship confirmation; online only, not in the outbox). Home has three tabs: `/` Log, `/calendar` Calendar, `/friends` Friends. `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `friends.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
+  (`smoke.ts`, `log.ts`, `invites.ts`, `calendar.ts`, `offline.ts`, `friends.ts`); fake Cognito `SignUp` runs the real pre-sign-up trigger.
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -107,6 +107,11 @@ code and UI.
   trigger gets only `TABLE_NAME` and `UpdateItem` (a pool ID in its env would be a circular dependency).
   Visitors can't call the API, so the Invite landing page only learns a link is spent when sign-up is refused.
   It checks the form before calling SignUp, because a refused SignUp may still have spent the Invite.
+- **Log writes go through `web/src/sync/logs.ts`** (`logNow`/`editLog`/`removeLog`/`useLogs`), never straight
+  to `api/log.ts`, or they won't work offline or show as pending. The server's answer to a queued write comes
+  later, so rules a form can check (Details, time) are checked before queueing (`views/log/form.ts`); only
+  what the server alone knows (7 days old on arrival, the 50-a-Day cap) comes back as a notice. A reload
+  that started before a write was confirmed is thrown away and re-run (else it wipes the new Log).
 - **Health data**: never log arguments, results, Notes or Details (handler logs only error name/message;
   AppSync logs errors without content).
 - **Time**: server rules use `now()` from `api/src/clock.ts`, never `Date.now()` directly. An e2e check that

@@ -15,7 +15,7 @@ import { contentSecurityPolicy } from "../infra/lib/csp";
 import { cognito, graphql } from "./backend";
 
 export const ORIGIN = "https://throne.test";
-const GRAPHQL_URL = "https://e2e.appsync-api.us-west-1.amazonaws.com/graphql";
+export const GRAPHQL_URL = "https://e2e.appsync-api.us-west-1.amazonaws.com/graphql";
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
 
 /** The deployed policy (hosting.ts) for the fake hosts. */

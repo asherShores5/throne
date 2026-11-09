@@ -73,3 +73,10 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 .flags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .flags button { height: 2.25rem; border-radius: 999px; }
 .log-form .actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+
+/* Offline outbox (ticket 04): pending marker, offline note, refused-write notices. */
+.log-item.pending { border-style: dashed; }
+.log-item .tag.pending-tag { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
+.offline-note { text-align: center; }
+.notice { display: flex; gap: 0.75rem; align-items: baseline; justify-content: center; flex-wrap: wrap; text-align: center; }
+.notice button.link { color: inherit; font-weight: 600; text-decoration: underline; }
