@@ -1,18 +1,19 @@
 import { useEffect, useState } from "react";
 import { signOut } from "../auth";
-import { loadMe, type Profile } from "../api/profile";
+import type { Profile } from "../api/profile";
+import { loadMeCached } from "../sync/profileCache";
 import { LogPanel } from "./log/LogPanel";
 
 /**
  * The signed-in home screen: the Log button and recent Logs (views/log/, ticket 03); 05 adds the Calendar.
- * Loading it also creates the Profile on a first sign-in (api/profile.ts).
+ * Loading it also creates the Profile on a first sign-in (api/profile.ts); offline it opens with the last copy (sync/profileCache.ts).
  */
 export function Home() {
   const [me, setMe] = useState<Profile>();
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    loadMe().then(setMe, (e) => setError((e as Error).message));
+    loadMeCached().then(setMe, (e) => setError((e as Error).message));
   }, []);
 
   return (

@@ -3,39 +3,33 @@
 // sheet can open it too).
 import { useState } from "react";
 import { BRISTOL_TYPES, FLAGS, NOTE_MAX, addDays, dayOf, type Flag } from "@throne/shared";
-import { errorText, updateLog, type Log } from "../../api/log";
+import type { Log } from "../../api/log";
+import { editLog } from "../../sync/logs";
 import { BristolIcon } from "./BristolIcon";
 import { editFor, formFor, type LogForm } from "./form";
 
 const FLAG_LABELS: Record<Flag, string> = { urgent: "Urgent", pain: "Pain", blood: "Blood", constipated: "Constipated", diarrhea: "Diarrhea" };
 
+/** Saving goes through the outbox (sync/logs.ts): the edit shows at once and syncs when it can. */
 export function LogEditor({ log, onSaved, onClose }: { log: Log; onSaved: (l: Log) => void; onClose: () => void }) {
   const [f, setF] = useState<LogForm>(() => formFor(log));
   const [error, setError] = useState<string>();
-  const [saving, setSaving] = useState(false);
   const set = (patch: Partial<LogForm>) => setF((x) => ({ ...x, ...patch }));
   const today = dayOf(Date.now(), log.logZone);
   const noteLength = [...f.note.trim()].length;
 
-  async function save() {
+  function save() {
     const r = editFor(log, f);
     if (!r.ok) return setError(r.error);
-    setSaving(true);
     setError(undefined);
-    try {
-      onSaved(await updateLog(r.edit));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setSaving(false);
-    }
+    onSaved(editLog(r.edit) ?? log);
   }
 
   return (
     <div className="sheet-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="log-details-title">
         <h2 id="log-details-title">Log details</h2>
-        <form noValidate onSubmit={(e) => (e.preventDefault(), void save())} className="log-form">
+        <form noValidate onSubmit={(e) => (e.preventDefault(), save())} className="log-form">
           <div className="row">
             <label>
               Date
@@ -86,7 +80,7 @@ export function LogEditor({ log, onSaved, onClose }: { log: Log; onSaved: (l: Lo
           {error && <p className="error" role="alert">{error}</p>}
           <div className="actions">
             <button type="button" onClick={onClose}>Cancel</button>
-            <button type="submit" className="primary" disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+            <button type="submit" className="primary">Save</button>
           </div>
         </form>
       </div>

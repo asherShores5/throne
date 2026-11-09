@@ -73,12 +73,12 @@ code and UI.
   table only (asserted in `infra/test/stacks.test.ts`).
 - `web/src/`: `auth.ts` (Cognito JSON API: password, passkeys, refresh), `config.ts` (runtime `/config.json`),
   `api/gql.ts` (one call; `NetworkError` for anything retryable), `api/<entity>.ts` (GraphQL calls),
-  `views/` (`Login`, `Home`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
+  `views/` (`Login`, `Home`; `views/log/`: the Log button + Undo toast, recent list, `LogEditor` details sheet). `sync/`: the offline outbox for Logs (`outbox.ts` pure queue: in order, folds edits/deletes into a create still on the device, drops refused writes; `pending.ts` pure: server copy + queue = what shows, refusal messages; `logs.ts` glue: localStorage per username, retry every 20 s, flush on open/online/focus/visible; `profileCache.ts`: last Profile so Home opens offline). `sw/sw.ts` + `src/swShell.ts`: the hand-rolled service worker built by
   `vite.config.ts`. Light/dark follow the phone (`prefers-color-scheme` in `styles.css`). Icons:
   `web/brand/icon.svg` is the source for the PNGs in `web/public/`.
 - `e2e/`: Playwright against an in-process fake backend (`backend.ts`: the real handler on the fake table,
   fake Cognito, AppSync's depth cap, `setServerClock`), launcher `app.ts`, helpers `lib.ts`, checks per area
-  (`smoke.ts`, `log.ts`).
+  (`smoke.ts`, `log.ts`, `offline.ts`).
   The app is served with the deployed CSP (`infra/lib/csp.ts`); any CSP violation fails the run.
 
 ## Gotchas that will bite you
@@ -93,6 +93,11 @@ code and UI.
   `e2e/backend.ts`, which set the env first. Never import it statically in a test.
 - **Self sign-up is off** until ticket 02 adds the Invite pre-sign-up trigger; turning it on without that
   trigger would let anyone make an account.
+- **Log writes go through `web/src/sync/logs.ts`** (`logNow`/`editLog`/`removeLog`/`useLogs`), never straight
+  to `api/log.ts`, or they won't work offline or show as pending. The server's answer to a queued write comes
+  later, so rules a form can check (Details, time) are checked before queueing (`views/log/form.ts`); only
+  what the server alone knows (7 days old on arrival, the 50-a-Day cap) comes back as a notice. A reload
+  that started before a write was confirmed is thrown away and re-run (else it wipes the new Log).
 - **Health data**: never log arguments, results, Notes or Details (handler logs only error name/message;
   AppSync logs errors without content).
 - **Time**: server rules use `now()` from `api/src/clock.ts`, never `Date.now()` directly. An e2e check that
