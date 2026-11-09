@@ -5,6 +5,11 @@
 // requests, Friendships: resolvers/friend.ts, which also owns the FRIENDCODE#<code> lookup items).
 // The Profile directory, so the Notifier's hourly run can find every Profile without a Scan (ticket 10):
 //   PROFILES / PROFILE#<sub>           one per Profile, written with the Profile record (ticket 11 deletes it too)
+// Delete Profile (ticket 11, resolvers/deleteProfile.ts) leaves one marker, with no content:
+//   PROFILE#<sub> / DELETED            { deletedAt, ttl? }: every call but deleteProfile is refused from then on
+//                                       (handler.ts), so a token still alive on another phone can't recreate
+//                                       anything; `ttl` (epoch seconds, the table's TTL attribute) is set only
+//                                       once the Cognito user is gone, so DynamoDB removes the marker a day later.
 // Lookup items, found by a secret rather than by Profile:
 //   INVITE#<token> / INVITE            the Invite: creator, createdAt, expiresAt, status open|used|revoked
 //                                       (the pre-sign-up trigger only has the token)
@@ -20,6 +25,7 @@ export const profilePk = (sub: string) => `PROFILE#${sub}`;
 export const PROFILE_SK = "PROFILE";
 export const DIRECTORY_PK = "PROFILES";
 export const directoryKey = (sub: string) => ({ PK: DIRECTORY_PK, SK: profilePk(sub) });
+export const deletedKey = (sub: string) => ({ PK: profilePk(sub), SK: "DELETED" });
 export const inviteKey = (token: string) => ({ PK: `INVITE#${token}`, SK: "INVITE" });
 export const INVITE_SLOT_PREFIX = "INVITESLOT#";
 

@@ -1,6 +1,8 @@
 /** Who is calling: the Cognito sub AppSync verified. Never an ID the client sent. */
 export interface Ctx {
   sub: string;
+  /** The Cognito username from the same verified token (only Delete Profile uses it, to delete the user). */
+  username?: string;
 }
 
 export type Resolver = (ctx: Ctx, args: Record<string, unknown>) => Promise<unknown>;

@@ -41,4 +41,7 @@ extend type Query {
 extend type Mutation {
   # Edit the caller's Display name, Avatar or Home zone (ticket 02).
   updateProfile(input: ProfileInput!): Profile!
+  # Permanently delete the caller's Profile and everything they made, and their sign-in (ticket 11). Safe to call
+  # again: a call stopped half way is finished by the next. Afterwards every other call answers ProfileDeleted.
+  deleteProfile: Boolean!
 }

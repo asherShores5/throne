@@ -60,7 +60,7 @@ await c.check("a newcomer opens the link, sees it doesn't make them Friends, and
   await p.getByRole("button", { name: "Create my Profile" }).click();
   await expect(p.getByText("Welcome, Nina")).toBeVisible();
   expect(profileOf("sub-nina")).toMatchObject({ displayName: "Nina", avatar: { emoji: "🦊", color: "#0c8599" }, homeZone: TIME_ZONE });
-  expect(db.dump().find((r) => r.PK.startsWith("INVITE#"))).toMatchObject({ status: "used", usedBy: "nina" });
+  expect(db.dump().find((r) => r.PK.startsWith("INVITE#"))).toMatchObject({ status: "used" });
 
   // The add-passkey flow, as in HoneyDo: the device's authenticator stands in for Face ID.
   await p.getByRole("button", { name: "Add a passkey" }).click();

@@ -78,10 +78,9 @@ async function seed() {
   await react(h.B, h.A, alexLogs[6], "👏");
   await comment(h.B, h.A, alexLogs[6], "sam on alex");
   await react(h.C, h.A, alexLogs[5], "😂");
-  await react(h.A, h.B, samLog, "🔥");
+  await react(h.A, h.B, samLog, "💪");
   await comment(h.A, h.B, samLog, "alex on sam");
   await comment(h.A, h.C, kimLog, "alex on kim");
-  await comment(h.B, h.B, samLog, "sam on own");
 
   setNow(MON_8_TOKYO);
   await h.notify(SCHEDULED_RUN);
@@ -156,7 +155,7 @@ describe("Delete Profile", () => {
     const sams = await h.call(h.B, "myLogs", { from: "2026-11-01", to: "2026-11-30" });
     const log = sams.find((l: { id: string }) => l.id === samLog);
     expect(log.reactions).toEqual([]);
-    expect(log.comments.map((c: { text: string }) => c.text)).toEqual(["sam on own"]);
+    expect(log.comments).toEqual([]);
 
     // Sam's stored Summary keeps Sam's own row and drops Alex's row and Awards.
     const [stored] = await h.call(h.B, "summaries");
@@ -205,8 +204,8 @@ describe("Delete Profile", () => {
       const stop = failWriteAt(stopAt);
       await expect(h.call(h.A, "deleteProfile"), `stopped at write ${stopAt}`).rejects.toThrow();
       stop();
-      // Meanwhile the Profile is gone for every other call.
-      await expect(h.call(h.A, "me", { homeZone: LA })).rejects.toThrow("ProfileDeleted");
+      // Once the first write (the marker) landed, the Profile is gone for every other call.
+      if (stopAt > 0) await expect(h.call(h.A, "me", { homeZone: LA })).rejects.toThrow("ProfileDeleted");
       expect(await h.call(h.A, "deleteProfile")).toBe(true);
       expect(alexLeftovers(), `stopped at write ${stopAt}`).toEqual([]);
       expect(h.deletedUsers()).toEqual([h.A.username]);

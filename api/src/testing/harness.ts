@@ -55,7 +55,7 @@ let deletedUsers: string[] = [];
 let cognitoBroken = false;
 setUserDeleter(async (username) => {
   if (cognitoBroken) throw Object.assign(new Error("Cognito is down"), { name: "InternalErrorException" });
-  deletedUsers.push(username);
+  if (!deletedUsers.includes(username)) deletedUsers.push(username); // like Cognito: deleting twice is one deletion
 });
 
 export interface SignUpOptions {

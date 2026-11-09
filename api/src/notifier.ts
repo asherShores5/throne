@@ -201,7 +201,14 @@ async function runScheduled(): Promise<RunSummary> {
       if (!p) continue;
       const week = dueSummaryWeek(t, homeZoneOr(p.homeZone));
       if (!week || (await hasSummary(sub, week.weekStart))) continue;
-      if (!(await claimSummary(sub, await buildSummary(sub, week, cache)))) continue;
+      // Someone in it is being deleted (Delete Profile): build it again without them; never snapshot them.
+      const leaveOut = new Set<string>();
+      let claim = await claimSummary(sub, await buildSummary(sub, week, cache));
+      for (let i = 0; Array.isArray(claim) && !claim.includes(sub) && i < 3; i++) {
+        claim.forEach((id) => leaveOut.add(id));
+        claim = await claimSummary(sub, await buildSummary(sub, week, cache, leaveOut));
+      }
+      if (claim !== "stored") continue;
       summary.summaries++;
       if (readPushPrefs(p.pushPrefs).summary) await deliver(sub, summaryPushPayload(), SUMMARY_PUSH, summary);
     } catch (e) {
