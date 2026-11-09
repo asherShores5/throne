@@ -80,6 +80,8 @@ export class AppStack extends Stack {
       sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      // Epoch seconds. Only Delete Profile's content-free marker sets it (api/src/table.ts).
+      timeToLiveAttribute: "ttl",
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     }));
@@ -148,8 +150,13 @@ export class AppStack extends Stack {
       bundling: { minify: true, sourceMap: true, format: nodejs.OutputFormat.ESM, target: "node22" },
       logGroup: new logs.LogGroup(this, "ApiLogs", { retention: logs.RetentionDays.TWO_WEEKS, removalPolicy: RemovalPolicy.DESTROY }),
     });
-    // Single-item reads/writes and queries (transactions use the same per-item actions); never Scan or Batch*.
-    table.grant(fn, "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query");
+    // Single-item reads/writes and queries (transactions use the same per-item actions, plus ConditionCheckItem
+    // for a transaction's ConditionCheck); never Scan or Batch*.
+    table.grant(fn, "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:ConditionCheckItem");
+    // Delete Profile ends by deleting the caller's own Cognito user (api/src/cognito.ts). The pool ID in this env is
+    // no cycle: the pool's only trigger is the separate pre-sign-up Lambda, and nothing in the pool refers to this one.
+    fn.addEnvironment("USER_POOL_ID", userPool.userPoolId);
+    fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["cognito-idp:AdminDeleteUser"], resources: [userPool.userPoolArn] }));
 
     const sdl = composeSchemaDir();
     const api = (this.api = new appsync.GraphqlApi(this, "Api", {
@@ -214,7 +221,8 @@ export class AppStack extends Stack {
     notifier.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: vapidParamArns(this) }));
     // Only what notifier.ts calls: GetItem/Query to read Profiles, prefs, Friendships, Logs, devices;
     // DeleteItem to prune; PutItem (conditional, attribute_not_exists) to store a weekly Summary (ticket 10).
-    table.grant(notifier, "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:PutItem");
+    // ConditionCheckItem: the Summary claim checks nobody in it is being deleted (api/src/resolvers/summary.ts).
+    table.grant(notifier, "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:PutItem", "dynamodb:ConditionCheckItem");
     // An event push that fails is dropped, never retried: a retry after a partial send would push twice.
     notifier.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(15) });
     // The Notifier only comes up once the keys exist.
