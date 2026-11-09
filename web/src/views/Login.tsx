@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DELETED_NOTICE } from "../account";
 import { lastUsername, signInWithPasskey, signInWithPassword } from "../auth";
 
 /**
@@ -11,6 +12,12 @@ export function Login() {
   const [usePassword, setUsePassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // Shown once, right after Delete Profile signed this device out.
+  const [deleted] = useState(() => {
+    const was = sessionStorage.getItem(DELETED_NOTICE) === "1";
+    sessionStorage.removeItem(DELETED_NOTICE);
+    return was;
+  });
 
   async function run(e: React.FormEvent, signIn: () => Promise<void>) {
     e.preventDefault();
@@ -37,6 +44,7 @@ export function Login() {
         <img src="/favicon.svg" alt="" width="56" height="56" />
       </div>
       <h1>Throne</h1>
+      {deleted && <p className="hint" role="status">Your Profile is deleted. Everything you made is gone.</p>}
       <input autoComplete={usePassword ? "username" : "username webauthn"} placeholder="Username" aria-label="Username" value={username}
         onChange={(e) => setUsername(e.target.value)} autoFocus={!username} autoCapitalize="none" />
       {usePassword ? (

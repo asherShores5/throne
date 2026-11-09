@@ -3,13 +3,17 @@
 // The cap of 3 open Invites holds even when creates race: a Profile has 3 Invite places
 // (PROFILE#<sub> / INVITESLOT#1..3). Creating writes the Invite and claims a free place in one
 // transaction, conditional on the place still being as it was read; a place is free when it is
-// empty or its Invite is no longer open (used, revoked or expired). No place free: refused.
+// empty or its Invite is no longer open (used or expired). No place free: refused.
+//
+// An Invite item exists only while one of its maker's places holds it: re-using a place deletes the spent Invite
+// in the same transaction, and revoking deletes it (an unknown token is refused like a revoked one). So a
+// Profile's Invites are exactly its 3 places, and Delete Profile (forgetInvitesOf) finds every one.
 import { randomBytes } from "node:crypto";
 import { GetCommand, QueryCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { INVITE_TTL_MS, MAX_OPEN_INVITES, isInviteToken } from "@throne/shared";
 import { now } from "../clock";
 import { UserError, invalid } from "../errors";
-import { INVITE_SLOT_PREFIX, TABLE, ddb, inviteKey, profilePk } from "../table";
+import { INVITE_SLOT_PREFIX, TABLE, ddb, inviteKey, isConditionFailed, profilePk } from "../table";
 import type { ResolverModule } from "./types";
 
 export interface Invite {
@@ -22,7 +26,7 @@ interface InviteRecord {
   creator: string;
   createdAt: number;
   expiresAt: number;
-  status: "open" | "used" | "revoked";
+  status: "open" | "used";
 }
 
 interface Slot {
@@ -90,6 +94,8 @@ async function tryCreate(sub: string): Promise<Invite | "full" | "raced"> {
                 : { ConditionExpression: "attribute_not_exists(#pk)", ExpressionAttributeNames: { "#pk": "PK" } }),
             },
           },
+          // The spent Invite that was in the place goes with it (nothing else points at it any more).
+          ...(free.token && free.invite ? [{ Delete: { TableName: TABLE, Key: inviteKey(free.token) } }] : []),
         ],
       }),
     );
@@ -98,6 +104,30 @@ async function tryCreate(sub: string): Promise<Invite | "full" | "raced"> {
     throw e;
   }
   return out(token, rec);
+}
+
+/**
+ * Delete Profile: every Invite `sub` made (open or spent) and its place. Each place goes in the same transaction as
+ * its Invite, so a retry finds whatever is left. An open Invite deleted here can no longer be spent.
+ */
+export async function forgetInvitesOf(sub: string): Promise<void> {
+  for (const s of await slots(sub)) {
+    if (!s.token) continue;
+    const place = { Delete: { TableName: TABLE, Key: slotKey(sub, s.n) } };
+    const mine = s.invite?.creator === sub;
+    await ddb().send(new TransactWriteCommand({
+      TransactItems: mine
+        ? [{
+            Delete: {
+              TableName: TABLE, Key: inviteKey(s.token), ConditionExpression: "#creator = :me",
+              ExpressionAttributeNames: { "#creator": "creator" }, ExpressionAttributeValues: { ":me": sub },
+            },
+          }, place]
+        : [place],
+    })).catch((e) => {
+      if (!isCancelled(e) && !isConditionFailed(e)) throw e;
+    });
+  }
 }
 
 export const invite: ResolverModule = {
@@ -131,13 +161,13 @@ export const invite: ResolverModule = {
           new TransactWriteCommand({
             TransactItems: [
               {
-                Update: {
+                // Deleted, not marked: a token that isn't there is refused like any other.
+                Delete: {
                   TableName: TABLE,
                   Key: inviteKey(token),
-                  UpdateExpression: "SET #status = :revoked",
                   ConditionExpression: "#status = :open AND #creator = :me",
                   ExpressionAttributeNames: { "#status": "status", "#creator": "creator" },
-                  ExpressionAttributeValues: { ":revoked": "revoked", ":open": "open", ":me": ctx.sub },
+                  ExpressionAttributeValues: { ":open": "open", ":me": ctx.sub },
                 },
               },
               {

@@ -379,6 +379,30 @@ async function endFriendship(me: string, other: string): Promise<true> {
   return true;
 }
 
+/**
+ * Delete Profile: everything Friend-shaped of `me` that lives outside `me`'s own partition, in an order that a
+ * stopped run can pick up again (each step deletes its own-partition pointer last or in the same transaction):
+ *  1. the Friend code, so nobody can find `me` to send a new request;
+ *  2. Friend requests both ways (both items of each together), so none can be accepted into a new Friendship;
+ *  3. each Friendship: first what `me` left on the Friend's Logs (found through the Friend's partition while
+ *     `FRIEND#<other>` still names them), then the Friendship itself with endFriendship's own cleanup.
+ * What's left in `me`'s partition goes with Delete Profile's sweep.
+ */
+export async function forgetFriendsOf(me: string): Promise<void> {
+  const mine = await get(myCodeKey(me));
+  if (mine) {
+    const code = mine.code as string;
+    const lookup = await ownerOf(code);
+    await deleteAll(lookup === me ? [codeKey(code), myCodeKey(me)] : [myCodeKey(me)]);
+  }
+  for (const { other } of await query(me, IN_PREFIX)) await deleteAll([outKey(other, me), inKey(me, other)]);
+  for (const { other } of await query(me, OUT_PREFIX)) await deleteAll([inKey(other, me), outKey(me, other)]);
+  for (const other of await friendIds(me)) {
+    await clearResponses(other, me);
+    await endFriendship(me, other);
+  }
+}
+
 const bySentAt = (a: { sentAt: number }, b: { sentAt: number }) => a.sentAt - b.sentAt;
 
 export const friend: ResolverModule = {

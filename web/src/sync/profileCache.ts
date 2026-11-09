@@ -4,7 +4,8 @@ import { currentUsername } from "../auth";
 import { NetworkError } from "../api/errors";
 import { loadMe, type Profile } from "../api/profile";
 
-const KEY = "throne.me.v1:";
+import { PROFILE_CACHE as KEY } from "../storageKeys";
+
 
 export async function loadMeCached(): Promise<Profile> {
   const key = KEY + (currentUsername() ?? "");

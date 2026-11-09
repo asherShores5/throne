@@ -13,6 +13,11 @@ a.button.primary {
   background: var(--accent); color: var(--on-accent); font-weight: 600;
 }
 button.link.danger { color: var(--danger); }
+button.danger { color: var(--danger); }
+button.danger-fill { background: var(--danger); border-color: var(--danger); color: var(--on-accent); font-weight: 600; }
+.confirm { display: grid; gap: 0.5rem; width: 100%; }
+.confirm .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.danger-zone { border-color: var(--danger); }
 
 .join { padding-top: 6vh; }
 .join .hint { text-align: left; }

@@ -1,6 +1,7 @@
 // Every resolver, by GraphQL field name. One module per entity (resolvers/<entity>.ts, schema in
 // schema/<entity>.graphql); infra wires an AppSync resolver for every Query/Mutation field in the
 // schema, so a new field needs only its schema line and its resolver here.
+import { deleteProfileModule } from "./deleteProfile";
 import { friend } from "./friend";
 import { invite } from "./invite";
 import { log } from "./log";
@@ -10,7 +11,7 @@ import { reaction } from "./reaction";
 import { summary } from "./summary";
 import type { Resolver, ResolverModule } from "./types";
 
-const MODULES: ResolverModule[] = [profile, invite, log, friend, reaction, push, summary];
+const MODULES: ResolverModule[] = [profile, invite, log, friend, reaction, push, summary, deleteProfileModule];
 
 function merge(type: "Query" | "Mutation"): Record<string, Resolver> {
   const out: Record<string, Resolver> = {};

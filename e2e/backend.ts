@@ -19,7 +19,7 @@ export const USERS: Record<string, User> = {
 
 // handler.ts reads these at import time, so import it only after setting them.
 process.env.TABLE_NAME = "e2e-table";
-const { handler, setDocClient } = await import("../api/src/handler");
+const { handler, setDocClient, setUserDeleter } = await import("../api/src/handler");
 const { FakeDocClient } = await import("../api/src/testing/fakeDynamo");
 const { appSyncEvent, preSignUpEvent } = await import("../api/src/testing/harness");
 // The real Invite check (Cognito's pre-sign-up trigger), on the same fake table.
@@ -34,6 +34,14 @@ export function setServerClock(start: string | Date) {
 
 export const db = new FakeDocClient();
 setDocClient(db);
+
+/**
+ * Cognito users Delete Profile deleted (AdminDeleteUser). Like Cognito, they can't sign in or refresh any more,
+ * while a token already issued still works at the API (AppSync checks only the signature, for up to an hour).
+ */
+export const deletedUsers = new Set<string>();
+setUserDeleter(async (username) => void deletedUsers.add(username));
+const exists = (u: string) => !!USERS[u] && !deletedUsers.has(u);
 
 // AppSync supplies these scalars; graphql-js needs them declared.
 const schema = buildSchema(`scalar AWSJSON\nscalar AWSDate\nscalar AWSDateTime\n${composeSchemaDir()}`);
@@ -83,7 +91,7 @@ const b64url = (s: string) => Buffer.from(s).toString("base64url");
 const challenge = () => b64url(crypto.randomUUID());
 const userForAccess = (token: unknown) => {
   const u = String(token ?? "").replace(/^fake-access\./, "");
-  return USERS[u] ? u : undefined;
+  return exists(u) ? u : undefined;
 };
 
 /** Start a check with these passkeys on the account (or none). */
@@ -118,11 +126,11 @@ export async function cognito(target: string, body: any): Promise<{ status: numb
     case "InitiateAuth": {
       if (body.AuthFlow === "REFRESH_TOKEN_AUTH") {
         const u = String(body.AuthParameters?.REFRESH_TOKEN ?? "").replace(/^fake-refresh\./, "");
-        return USERS[u] ? { status: 200, json: { AuthenticationResult: { ...tokensFor(u).AuthenticationResult, RefreshToken: undefined } } } : fail("NotAuthorizedException", "Invalid Refresh Token");
+        return exists(u) ? { status: 200, json: { AuthenticationResult: { ...tokensFor(u).AuthenticationResult, RefreshToken: undefined } } } : fail("NotAuthorizedException", "Invalid Refresh Token");
       }
       const u = body.AuthParameters?.USERNAME;
       if (body.AuthParameters?.PREFERRED_CHALLENGE === "WEB_AUTHN") {
-        const ids = USERS[u] ? passkeysOf(u) : [];
+        const ids = exists(u) ? passkeysOf(u) : [];
         // Like Cognito: no passkey means the other available challenges instead.
         if (!ids.length) return { status: 200, json: { ChallengeName: "SELECT_CHALLENGE", Session: "s-none", AvailableChallenges: ["PASSWORD"] } };
         const session = `s-${crypto.randomUUID()}`;
@@ -131,7 +139,7 @@ export async function cognito(target: string, body: any): Promise<{ status: numb
         return { status: 200, json: { ChallengeName: "WEB_AUTHN", Session: session, ChallengeParameters: { CREDENTIAL_REQUEST_OPTIONS: JSON.stringify(options) } } };
       }
       // preventUserExistenceErrors: an unknown user looks like a wrong password.
-      if (!USERS[u] || !passwordOk(u, body.AuthParameters?.PASSWORD)) return wrong();
+      if (!exists(u) || !passwordOk(u, body.AuthParameters?.PASSWORD)) return wrong();
       return { status: 200, json: tokensFor(u) };
     }
     case "RespondToAuthChallenge": {

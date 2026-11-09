@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { AVATAR_COLORS, AVATAR_EMOJI, DEFAULT_HOME_ZONE, cleanDisplayName, homeZoneOr, isAvatar, isHomeZone, newProfile } from "./profile";
+import {
+  AVATAR_COLORS, AVATAR_EMOJI, DEFAULT_HOME_ZONE, DELETE_CONFIRM_WORD, cleanDisplayName, homeZoneOr, isAvatar, isDeleteConfirmed, isHomeZone, newProfile,
+} from "./profile";
 
 describe("Avatar choices", () => {
   it("a fixed palette of 8 distinct colors and a fixed list of distinct emoji", () => {
@@ -56,5 +58,13 @@ describe("Avatar", () => {
     expect(isAvatar({ emoji: "🦆", color: "#2b8a3e" })).toBe(true);
     for (const a of [{ emoji: "💩", color: "#2b8a3e" }, { emoji: "🦆", color: "#000000" }, { emoji: "🦆" }, null, "🦆", { emoji: "🦆", color: "#2b8a3e", x: 1 }])
       expect(isAvatar(a)).toBe(false);
+  });
+});
+
+describe("Delete Profile confirmation", () => {
+  it("needs the word typed out (any case, spaces around ok); anything else, empty included, isn't a yes", () => {
+    for (const yes of ["delete", "DELETE", " Delete "]) expect(isDeleteConfirmed(yes), yes).toBe(true);
+    for (const no of ["", "del", "delete me", "yes", undefined, null, 1]) expect(isDeleteConfirmed(no), String(no)).toBe(false);
+    expect(DELETE_CONFIRM_WORD).toBe("delete");
   });
 });

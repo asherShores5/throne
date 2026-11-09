@@ -37,5 +37,13 @@ export async function updateProfile(input: ProfileEdit): Promise<Profile> {
   return r.updateProfile;
 }
 
+/**
+ * Delete the caller's Profile for good, with everything they made and their sign-in (ticket 11). Safe to repeat:
+ * a call that stopped half way is finished by the next. Use account.ts deleteMyProfile, which also cleans up here.
+ */
+export async function deleteProfile(): Promise<void> {
+  await gql(`mutation DeleteProfile { deleteProfile }`);
+}
+
 /** The server's message without its "ValidationError: " style prefix, for showing to the Profile. */
-export const plainMessage = (e: unknown) => String((e as Error)?.message ?? e).replace(/^(ValidationError|NotFound|Forbidden|Unavailable): /, "");
+export const plainMessage = (e: unknown) => String((e as Error)?.message ?? e).replace(/^(ValidationError|NotFound|Forbidden|Unavailable|ProfileDeleted): /, "");

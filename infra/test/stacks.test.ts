@@ -33,6 +33,10 @@ describe("data", () => {
     });
   });
 
+  it("TTL on `ttl` (epoch seconds): only Delete Profile's marker sets it", () => {
+    app.hasResourceProperties("AWS::DynamoDB::GlobalTable", { TimeToLiveSpecification: { AttributeName: "ttl", Enabled: true } });
+  });
+
   it("the API Lambda gets only single-item and query actions on the table (no Scan, no Batch*)", () => {
     const [roleId] = Object.keys(app.findResources("AWS::IAM::Role")).filter((id) => id.startsWith("ApiFn"));
     const statements = Object.values(app.findResources("AWS::IAM::Policy"))
@@ -40,7 +44,10 @@ describe("data", () => {
       .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
       .filter((st: any) => [st.Action].flat().some((a: string) => a.startsWith("dynamodb:")));
     expect(statements).toHaveLength(1);
-    expect([statements[0].Action].flat().sort()).toEqual(["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]);
+    // ConditionCheckItem: a transaction's ConditionCheck (a Reaction checks the Friendship) needs its own action.
+    expect([statements[0].Action].flat().sort()).toEqual([
+      "dynamodb:ConditionCheckItem", "dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem",
+    ]);
     const [tableId] = Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"));
     expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
   });
@@ -170,11 +177,11 @@ describe("push (least privilege)", () => {
     "Fn::Join": ["", ["arn:aws:ssm:us-west-1:", { Ref: "AWS::AccountId" }, `:parameter/throne/vapid/${name}`]],
   });
 
-  it("the Notifier reads the VAPID keys, reads/prunes the table and stores Summaries (PutItem), nothing more", () => {
+  it("the Notifier reads the VAPID keys, reads/prunes the table and stores Summaries (PutItem + ConditionCheck), nothing more", () => {
     const sts = statementsOf(roleOf(fnId("NotifierFn")));
     const ddb = sts.filter((st: any) => actions(st).some((a) => a.startsWith("dynamodb:")));
     expect(ddb).toHaveLength(1);
-    expect(actions(ddb[0]).sort()).toEqual(["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]);
+    expect(actions(ddb[0]).sort()).toEqual(["dynamodb:ConditionCheckItem", "dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]);
     expect(ddb[0].Resource).toEqual(tableArn());
     const ssm = sts.filter((st: any) => actions(st).some((a) => a.startsWith("ssm:")));
     expect(ssm).toEqual([expect.objectContaining({ Action: "ssm:GetParameter", Effect: "Allow" })]);
@@ -194,6 +201,19 @@ describe("push (least privilege)", () => {
     expect(fn.Properties.Environment.Variables.NOTIFIER_FUNCTION).toEqual({ Ref: fnId("NotifierFn") });
     // Nothing secret reaches the API: no VAPID parameter names in its env.
     expect(JSON.stringify(fn.Properties.Environment)).not.toMatch(/vapid/i);
+  });
+
+  it("Delete Profile: the API Lambda may only AdminDeleteUser, on this user pool only; nobody else touches Cognito users", () => {
+    const fn = app.findResources("AWS::Lambda::Function")[fnId("ApiFn")];
+    const [poolId] = Object.keys(app.findResources("AWS::Cognito::UserPool"));
+    const cognito = statementsOf(roleOf(fnId("ApiFn"))).filter((st: any) => actions(st).some((a) => a.startsWith("cognito-idp:")));
+    expect(cognito).toEqual([expect.objectContaining({ Action: "cognito-idp:AdminDeleteUser", Effect: "Allow", Resource: { "Fn::GetAtt": [poolId, "Arn"] } })]);
+    expect(fn.Properties.Environment.Variables.USER_POOL_ID).toEqual({ Ref: poolId });
+    const others = Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => !JSON.stringify(p.Properties.Roles).includes(roleOf(fnId("ApiFn"))))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+      .flatMap(actions);
+    expect(others.filter((a) => a.startsWith("cognito-idp:"))).toEqual([]);
   });
 
   it("only the Notifier and the VapidKeys function may touch the VAPID parameters", () => {

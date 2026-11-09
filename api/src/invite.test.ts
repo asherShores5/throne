@@ -141,11 +141,11 @@ describe("pre-sign-up trigger", () => {
     await expect(h.signUp(a.token, "fed", { triggerSource: "PreSignUp_ExternalProvider" })).rejects.toThrow("Sign-up failed");
   });
 
-  it("stores no password or Display name, only who made and who spent the Invite", async () => {
+  it("stores no password, Display name or username of who spent it, only who made the Invite", async () => {
     const a = await create();
     await h.signUp(a.token, "newbie");
     const rec = h.db.dump().find((r) => r.PK === `INVITE#${a.token}`)!;
-    expect(Object.keys(rec).sort()).toEqual(["PK", "SK", "createdAt", "creator", "expiresAt", "status", "usedAt", "usedBy"].sort());
-    expect(rec).toMatchObject({ creator: h.A.sub, status: "used", usedBy: "newbie" });
+    expect(Object.keys(rec).sort()).toEqual(["PK", "SK", "createdAt", "creator", "expiresAt", "status", "usedAt"].sort());
+    expect(rec).toMatchObject({ creator: h.A.sub, status: "used" });
   });
 });

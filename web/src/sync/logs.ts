@@ -18,8 +18,8 @@ import { clean, createLog, deleteLog, myLogs, newLogId, updateLog, type Log, typ
 import { createOutbox, type Op, type Outbox } from "./outbox";
 import { applyPending, refusedText, type ShownLog } from "./pending";
 
-const CACHE = "throne.logs.v1:";
-const OUTBOX = "throne.outbox.v1:";
+import { LOGS_CACHE as CACHE, LOGS_OUTBOX as OUTBOX } from "../storageKeys";
+
 /** After a failed send, try again this often while writes are waiting. */
 export const RETRY_MS = 20_000;
 

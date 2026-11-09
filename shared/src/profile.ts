@@ -69,3 +69,8 @@ export function newProfile(deviceZone: unknown): ProfileFields {
     homeZone: homeZoneOr(deviceZone),
   };
 }
+
+/** Delete Profile asks for this word to be typed, so it can't happen by a stray tap. */
+export const DELETE_CONFIRM_WORD = "delete";
+
+export const isDeleteConfirmed = (typed: unknown): boolean => typeof typed === "string" && typed.trim().toLowerCase() === DELETE_CONFIRM_WORD;

@@ -29,10 +29,11 @@ export async function handler(event: PreSignUpTriggerEvent): Promise<PreSignUpTr
       new UpdateCommand({
         TableName: TABLE,
         Key: inviteKey(token),
-        UpdateExpression: "SET #status = :used, #usedAt = :now, #usedBy = :who",
+        // Not who spent it: the newcomer's username on the inviter's item would outlive a Delete Profile.
+        UpdateExpression: "SET #status = :used, #usedAt = :now",
         ConditionExpression: "#status = :open AND #expiresAt > :now",
-        ExpressionAttributeNames: { "#status": "status", "#usedAt": "usedAt", "#usedBy": "usedBy", "#expiresAt": "expiresAt" },
-        ExpressionAttributeValues: { ":used": "used", ":open": "open", ":now": t, ":who": event.userName },
+        ExpressionAttributeNames: { "#status": "status", "#usedAt": "usedAt", "#expiresAt": "expiresAt" },
+        ExpressionAttributeValues: { ":used": "used", ":open": "open", ":now": t },
       }),
     );
   } catch (e) {

@@ -6,6 +6,12 @@ import { CognitoError, freshTokens } from "../auth";
 import { getConfig } from "../config";
 import { NetworkError } from "./errors";
 
+let profileDeleted: (() => void) | undefined;
+/** Who finishes a Delete Profile when the server says this Profile is deleted (account.ts). */
+export function onProfileDeleted(fn: () => void) {
+  profileDeleted = fn;
+}
+
 /** A weak signal counts as offline after this long, so a write waits in the outbox instead of hanging. */
 const TIMEOUT_MS = 15_000;
 
@@ -34,7 +40,11 @@ export async function gql<T = any>(query: string, variables: object = {}): Promi
   } finally {
     clearTimeout(timer);
   }
-  if (json.errors?.length) throw new Error(json.errors.map((e: { message: string }) => e.message).join("; "));
+  if (json.errors?.length) {
+    const message = json.errors.map((e: { message: string }) => e.message).join("; ");
+    if (/(^|; )ProfileDeleted: /.test(message)) profileDeleted?.();
+    throw new Error(message);
+  }
   if (r.status >= 500) throw new NetworkError(`server ${r.status}`);
   if (!r.ok) throw new Error(`server ${r.status}`);
   return json.data as T;

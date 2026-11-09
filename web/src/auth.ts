@@ -5,6 +5,7 @@
 // runs out.
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { getConfig } from "./config";
+import { HAS_PASSKEY, LAST_USER } from "./storageKeys";
 
 interface Tokens {
   idToken: string;
@@ -15,10 +16,6 @@ interface Tokens {
 }
 
 const KEY = "throne.tokens";
-/** Last username signed in on this device, so the sign-in screen is one tap. */
-const LAST_USER = "throne.lastUser";
-/** Set once this device has added a passkey for the signed-in Profile. Cleared on sign out. */
-const HAS_PASSKEY = "throne.hasPasskey";
 let tokens: Tokens | null = JSON.parse(localStorage.getItem(KEY) ?? "null");
 const listeners = new Set<() => void>();
 
