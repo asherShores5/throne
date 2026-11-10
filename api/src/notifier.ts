@@ -1,0 +1,214 @@
+// Notifier Lambda (ticket 09; push sending copied from HoneyDo). Two ways in:
+//   - an event push: the API invokes it asynchronously after a write commits (api/src/events.ts) with a
+//     shared PushEvent (ids only). It re-checks the facts (the Friendship or the request still there), picks
+//     the recipients by their preferences, and sends "<name> did X" to each of their devices.
+//   - the hourly run (EventBridge Scheduler, no event; ticket 10): builds each Profile's weekly Summary at
+//     Monday 08:00 in their Home zone and pushes it (runScheduled() below).
+// Sending, for both: one push per device; a device the push service says is gone (404/410) is deleted.
+//
+// It is the only principal that reads the VAPID private key (SSM); the API Lambda has no SSM access.
+// Bundled as CJS (infra/lib/stacks.ts): web-push is CommonJS and calls require("crypto").
+// Health data: it never reads Details; push text comes from shared eventPushPayload (who + what only).
+import { createHash } from "node:crypto";
+import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import webpush from "web-push";
+import {
+  dueSummaryWeek, eventPushPayload, homeZoneOr, isScheduledRun, parsePushEvent, readPushPrefs, summaryPushPayload,
+  PUSH_KINDS, type PushEvent, type PushKind, type PushPayload,
+} from "@throne/shared";
+import { now } from "./clock";
+import { PROFILE_SK, TABLE, ddb, isConditionFailed, profilePk, queryPrefix } from "./table";
+import { followersOf, hasFriendRequest, isFriend, profileCard } from "./resolvers/friend";
+import { profileIds } from "./resolvers/profile";
+import { PUSH_PREFIX, pushToggles } from "./resolvers/push";
+import { buildSummary, claimSummary, hasSummary, type LogCache } from "./resolvers/summary";
+
+export { setDocClient } from "./table";
+
+const PUSH_TIMEOUT_MS = 5000;
+
+// ---- seams -----------------------------------------------------------------
+
+/** One device's Web Push subscription, in the shape web-push takes. */
+export interface PushTarget {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
+export interface SendOptions {
+  /** Seconds the push service keeps an undelivered push (RFC 8030 §5.2). */
+  TTL: number;
+  urgency: "very-low" | "low" | "normal" | "high";
+  /** A newer push with the same topic replaces an undelivered one (RFC 8030 §5.4). */
+  topic?: string;
+}
+
+/** Sends one push. Rejects on failure; a push-service answer carries `statusCode` (404/410 = gone). */
+export type PushSender = (sub: PushTarget, payload: string, opts: SendOptions) => Promise<void>;
+
+let vapid: Promise<void> | undefined;
+
+/** VAPID keys from SSM, read once per cold start. The private key never leaves this process. */
+function loadVapid() {
+  vapid ??= (async () => {
+    const ssm = new SSMClient({});
+    const get = async (name: string) =>
+      (await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }))).Parameter!.Value!;
+    const [publicKey, privateKey] = await Promise.all([get(process.env.VAPID_PUBLIC_PARAM!), get(process.env.VAPID_PRIVATE_PARAM!)]);
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT!, publicKey, privateKey);
+  })().catch((e) => {
+    vapid = undefined; // retry on the next run instead of caching the failure
+    throw e;
+  });
+  return vapid;
+}
+
+const webPushSender: PushSender = async (sub, payload, opts) => {
+  await loadVapid();
+  await webpush.sendNotification(sub, payload, { ...opts, timeout: PUSH_TIMEOUT_MS });
+};
+
+let send: PushSender = webPushSender;
+
+/** Test seam: swap the push sender for a fake (undefined = web-push). Production never calls this. */
+export function setPushSender(sender: PushSender | undefined) {
+  send = sender ?? webPushSender;
+}
+
+// ---- devices ---------------------------------------------------------------
+
+interface Device extends PushTarget {
+  SK: string;
+}
+
+async function devicesOf(sub: string): Promise<Device[]> {
+  return (await queryPrefix(profilePk(sub), PUSH_PREFIX)).map((i) => ({
+    SK: i.SK as string, endpoint: i.endpoint as string, keys: { p256dh: i.p256dh as string, auth: i.auth as string },
+  }));
+}
+
+export interface RunSummary {
+  /** Device deliveries that succeeded / failed, and subscriptions deleted as gone. */
+  sent: number;
+  failed: number;
+  pruned: number;
+  /** Summaries stored by this run (scheduled runs only). */
+  summaries?: number;
+}
+
+const empty = (): RunSummary => ({ sent: 0, failed: 0, pruned: 0 });
+
+/** Send one payload to every device of `to`, pruning the ones that are gone. */
+async function deliver(to: string, payload: PushPayload, opts: SendOptions, summary: RunSummary) {
+  const body = JSON.stringify(payload);
+  await Promise.all(
+    (await devicesOf(to)).map(async (d) => {
+      try {
+        await send({ endpoint: d.endpoint, keys: d.keys }, body, opts);
+        summary.sent++;
+      } catch (e) {
+        summary.failed++;
+        const status = (e as { statusCode?: number }).statusCode;
+        if (status === 404 || status === 410) {
+          try {
+            // Only if it's still that endpoint: the phone may have re-enabled (new endpoint) meanwhile.
+            await ddb().send(new DeleteCommand({
+              TableName: TABLE, Key: { PK: profilePk(to), SK: d.SK },
+              ConditionExpression: "#endpoint = :e", ExpressionAttributeNames: { "#endpoint": "endpoint" }, ExpressionAttributeValues: { ":e": d.endpoint },
+            }));
+            summary.pruned++;
+          } catch (err) {
+            if (!isConditionFailed(err)) throw err;
+          }
+        } else {
+          // 403 is a VAPID setup bug, 413 ours, 429/5xx transient: keep the subscription. No ids or text logged.
+          console.error(`push failed (${status ?? "no status"})`, (e as Error)?.name);
+        }
+      }
+    }),
+  );
+}
+
+// ---- event pushes ----------------------------------------------------------
+
+/** Who should get this event's push, given what's true now (shared PUSH_KINDS says what to re-check). */
+async function recipients(e: PushEvent): Promise<string[]> {
+  const rule = PUSH_KINDS[e.kind];
+  if (rule.recheck === "followers") return followersOf(e.from);
+  if (!("to" in e) || e.to === e.from) return [];
+  // Still true? A request may be cancelled, a Friendship ended, before this runs.
+  const still = rule.recheck === "request" ? await hasFriendRequest(e.to, e.from) : await isFriend(e.to, e.from);
+  if (!still) return [];
+  return rule.toggle && (await pushToggles(e.to))[rule.toggle] ? [e.to] : [];
+}
+
+/** Send options for a kind; `from` names the sender for a per-sender topic (hashed: a topic is at most 32 chars). */
+function sendOptions(kind: PushKind, from?: string): SendOptions {
+  const rule = PUSH_KINDS[kind];
+  const topic = rule.topic === "fixed" ? kind
+    : rule.topic === "sender" && from ? "l" + createHash("sha256").update(from).digest("base64url").slice(0, 31)
+    : undefined;
+  return { TTL: rule.ttl, urgency: "normal", topic };
+}
+
+export async function sendEventPush(e: PushEvent): Promise<RunSummary> {
+  const summary = empty();
+  const to = await recipients(e);
+  if (!to.length) return summary;
+  const card = await profileCard(e.from);
+  if (!card) return summary;
+  const payload = eventPushPayload(e, card.displayName);
+  const opts = sendOptions(e.kind, e.from);
+  for (const sub of to) await deliver(sub, payload, opts, summary);
+  return summary;
+}
+
+// ---- scheduled runs (ticket 10) --------------------------------------------
+
+
+/**
+ * The hourly run: for each Profile (the directory) whose Home zone is past 08:00 on a Monday, build last
+ * week's Summary (shared dueSummaryWeek), store it with a conditional write, and only if this run's write
+ * landed, push it to the Profile's devices when their Summary push is on. Claim before send: a repeated
+ * or overlapping run finds the Summary there and does nothing; a crash between store and push loses
+ * that one push. One Profile failing doesn't stop the rest.
+ */
+async function runScheduled(): Promise<RunSummary> {
+  const summary = { ...empty(), summaries: 0 };
+  const t = now();
+  const cache: LogCache = new Map();
+  for (const sub of await profileIds()) {
+    try {
+      const p = (await ddb().send(new GetCommand({ TableName: TABLE, Key: { PK: profilePk(sub), SK: PROFILE_SK } }))).Item;
+      if (!p) continue;
+      const week = dueSummaryWeek(t, homeZoneOr(p.homeZone));
+      if (!week || (await hasSummary(sub, week.weekStart))) continue;
+      // Someone in it is being deleted (Delete Profile): build it again without them; never snapshot them.
+      const leaveOut = new Set<string>();
+      let claim = await claimSummary(sub, await buildSummary(sub, week, cache));
+      for (let i = 0; Array.isArray(claim) && !claim.includes(sub) && i < 3; i++) {
+        claim.forEach((id) => leaveOut.add(id));
+        claim = await claimSummary(sub, await buildSummary(sub, week, cache, leaveOut));
+      }
+      if (claim !== "stored") continue;
+      summary.summaries++;
+      if (readPushPrefs(p.pushPrefs)[PUSH_KINDS.summary.toggle!]) await deliver(sub, summaryPushPayload(), sendOptions("summary"), summary);
+    } catch (e) {
+      // No ids, no numbers: just that one Profile's Summary failed (the next hourly run that Monday retries).
+      console.error("summary failed", (e as Error)?.name);
+    }
+  }
+  return summary;
+}
+
+// ---- entry -----------------------------------------------------------------
+
+export async function handler(event: unknown): Promise<RunSummary> {
+  const e = parsePushEvent(event);
+  const scheduled = !e && isScheduledRun(event);
+  const summary = e ? await sendEventPush(e) : scheduled ? await runScheduled() : empty();
+  // Counts only: never who, never what.
+  console.log(JSON.stringify({ msg: "notifier run", kind: e?.kind ?? (scheduled ? "scheduled" : "ignored"), ...summary }));
+  return summary;
+}

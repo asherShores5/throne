@@ -1,0 +1,90 @@
+// Table layout. One table, keys PK/SK; every partition belongs to one Profile, keyed by its Cognito sub:
+//   PROFILE#<sub> / PROFILE            the Profile record (Display name, Avatar, Home zone)
+//   PROFILE#<sub> / INVITESLOT#<1-3>   one of the Profile's 3 Invite places: { token } of the Invite in it
+// Later tickets add their items under the same partition (Logs: resolvers/log.ts; Friend code, Friend
+// requests, Friendships: resolvers/friend.ts, which also owns the FRIENDCODE#<code> lookup items).
+// The Profile directory, so the Notifier's hourly run can find every Profile without a Scan (ticket 10):
+//   PROFILES / PROFILE#<sub>           one per Profile, written with the Profile record (ticket 11 deletes it too)
+// Delete Profile (ticket 11, resolvers/deleteProfile.ts) leaves one marker, with no content:
+//   PROFILE#<sub> / DELETED            { deletedAt, ttl? }: every call but deleteProfile is refused from then on
+//                                       (handler.ts), so a token still alive on another phone can't recreate
+//                                       anything; `ttl` (epoch seconds, the table's TTL attribute) is set only
+//                                       once the Cognito user is gone, so DynamoDB removes the marker a day later.
+// Lookup items, found by a secret rather than by Profile:
+//   INVITE#<token> / INVITE            the Invite: creator, createdAt, expiresAt, status open|used|revoked
+//                                       (the pre-sign-up trigger only has the token)
+//
+// Every expression aliases its attribute names (#pk, #status, ...): testing/fakeDynamo.ts refuses a bare
+// name, so a DynamoDB reserved word can't slip through to a live ValidationException.
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
+
+export const TABLE = process.env.TABLE_NAME!;
+
+export const profilePk = (sub: string) => `PROFILE#${sub}`;
+export const PROFILE_SK = "PROFILE";
+export const DIRECTORY_PK = "PROFILES";
+export const directoryKey = (sub: string) => ({ PK: DIRECTORY_PK, SK: profilePk(sub) });
+export const deletedKey = (sub: string) => ({ PK: profilePk(sub), SK: "DELETED" });
+export const inviteKey = (token: string) => ({ PK: `INVITE#${token}`, SK: "INVITE" });
+export const INVITE_SLOT_PREFIX = "INVITESLOT#";
+
+export type DocClient = Pick<DynamoDBDocumentClient, "send">;
+
+let client: DocClient = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+  marshallOptions: { removeUndefinedValues: true },
+});
+
+/** The document client every resolver uses. */
+export const ddb = (): DocClient => client;
+
+/** Test seam: swap the document client (see testing/harness.ts). Production never calls this. */
+export function setDocClient(c: DocClient) {
+  client = c;
+}
+
+/** True for a failed condition on a single write (DynamoDB and the fake both name it so). */
+export const isConditionFailed = (e: unknown) => (e as { name?: string })?.name === "ConditionalCheckFailedException";
+
+/** True when a transaction was cancelled (one of its conditions failed, or a conflicting write raced it). */
+export const isCancelled = (e: unknown) => (e as { name?: string })?.name === "TransactionCanceledException";
+
+/**
+ * For a cancelled transaction: which of its items failed their condition, in TransactItems order. Undefined for
+ * any other error (rethrow it). DynamoDB and the fake both report per-item CancellationReasons.
+ */
+export function failedConditions(e: unknown): boolean[] | undefined {
+  if (!isCancelled(e)) return undefined;
+  const reasons = (e as { CancellationReasons?: { Code?: string }[] }).CancellationReasons ?? [];
+  return reasons.map((r) => r.Code === "ConditionalCheckFailed");
+}
+
+export interface PrefixQuery {
+  /** Highest SK first. */
+  descending?: boolean;
+  /** Stop after this many items. Without it every page is read. */
+  max?: number;
+}
+
+/**
+ * Every item in partition `pk` whose SK starts with `prefix`, following LastEvaluatedKey through all pages (a 1 MB
+ * page can cut a list short, and Delete Profile must see everything). The one way to list items under a prefix.
+ */
+export async function queryPrefix(pk: string, prefix: string, opts: PrefixQuery = {}): Promise<Record<string, unknown>[]> {
+  const items: Record<string, unknown>[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await client.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :p)",
+      ExpressionAttributeNames: { "#pk": "PK", "#sk": "SK" },
+      ExpressionAttributeValues: { ":pk": pk, ":p": prefix },
+      ExclusiveStartKey: start,
+      ...(opts.descending ? { ScanIndexForward: false } : {}),
+      ...(opts.max ? { Limit: opts.max - items.length } : {}),
+    }));
+    items.push(...(r.Items ?? []));
+    start = r.LastEvaluatedKey;
+  } while (start && !(opts.max && items.length >= opts.max));
+  return items;
+}

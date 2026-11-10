@@ -1,0 +1,22 @@
+# Invites (ticket 02). Resolvers: api/src/resolvers/invite.ts. The Cognito pre-sign-up trigger
+# (api/src/preSignUp.ts) spends them; that isn't part of this API.
+
+# A single-use link to create a new Profile. `token` goes after # in the link (shared/src/invite.ts).
+type Invite {
+  token: ID!
+  createdAt: AWSDateTime!
+  # Open until then (7 days after createdAt), unless used or revoked first.
+  expiresAt: AWSDateTime!
+}
+
+extend type Query {
+  # The caller's open Invites (not used, revoked or expired), oldest first.
+  invites: [Invite!]!
+}
+
+extend type Mutation {
+  # A new Invite. Refused if the caller already has 3 open.
+  createInvite: Invite!
+  # Revoke one of the caller's open Invites, so its link stops working. True when done.
+  revokeInvite(token: ID!): Boolean!
+}

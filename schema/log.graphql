@@ -1,0 +1,57 @@
+# Logs (ticket 03). Resolvers: api/src/resolvers/log.ts; rules: shared/src/log.ts.
+# Plain comments, not "descriptions": AppSync has rejected described types before.
+
+# One bathroom visit at a point in time, with optional Details.
+type Log {
+  # A UUID the client made, so a retried create is the same Log.
+  id: ID!
+  # When it happened, ISO 8601 UTC (e.g. 2026-11-08T17:05:00.000Z).
+  instant: String!
+  # The IANA zone it was made in (the Profile's Home zone then). Fixes its Day forever.
+  logZone: String!
+  # YYYY-MM-DD of instant in logZone.
+  day: String!
+  # Details, all optional. Duration in minutes (1-180), Bristol type 1-7, Note up to 200 characters.
+  duration: Int
+  bristolType: Int
+  note: String
+  # A subset of urgent, pain, blood, constipated, diarrhea (in that order).
+  flags: [String!]!
+}
+
+input NewLog {
+  id: ID!
+  # ISO 8601 with Z or an offset; the server's now if left out. At most 5 minutes ahead, 7 days back.
+  instant: String
+  duration: Int
+  bristolType: Int
+  note: String
+  flags: [String!]
+}
+
+# An edit replaces all the Details (a field left out is cleared); instant left out keeps the time.
+input LogEdit {
+  id: ID!
+  instant: String
+  duration: Int
+  bristolType: Int
+  note: String
+  flags: [String!]
+}
+
+extend type Query {
+  # The caller's Logs on the Days from..to (YYYY-MM-DD, inclusive, at most 42 Days), oldest first.
+  myLogs(from: String!, to: String!): [Log!]!
+  # A Friend's Logs on the Days from..to (same rules), on the Friend's own Days, with every Detail.
+  # Anyone who isn't the caller's Friend right now gets NotFound, the same as an id that doesn't exist.
+  friendLogs(friend: ID!, from: String!, to: String!): [Log!]!
+}
+
+extend type Mutation {
+  # Saves a Log for the caller in their Home zone. Retrying the same id returns the first Log unchanged.
+  createLog(log: NewLog!): Log!
+  # Edits one of the caller's own Logs (same time rules as create, checked on the new time).
+  updateLog(log: LogEdit!): Log!
+  # Deletes one of the caller's own Logs. Deleting one that's already gone succeeds (returns the id).
+  deleteLog(id: ID!): ID!
+}

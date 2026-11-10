@@ -1,0 +1,272 @@
+import { App } from "aws-cdk-lib";
+import { Match, Template } from "aws-cdk-lib/assertions";
+import { beforeAll, describe, expect, it } from "vitest";
+import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
+import { SCHEDULED_RUN } from "../../shared/src/push";
+import { LOG as WEB_LOG, SUMMARY as WEB_SUMMARY } from "../../web/src/api/selections";
+import { buildApp } from "../lib/app";
+
+// One synth for the whole file: bundling the API Lambda with esbuild is the slow part.
+let app: Template;
+const preSignUpId = () => {
+  const ids = Object.keys(app.findResources("AWS::Lambda::Function")).filter((id) => id.startsWith("PreSignUpFn"));
+  expect(ids).toHaveLength(1);
+  return ids[0];
+};
+beforeAll(() => {
+  app = Template.fromStack(buildApp(new App(), { region: "us-west-1" }).app);
+}, 120_000);
+
+describe("data", () => {
+  it("one PK/SK table, on demand, with point-in-time recovery, deletion protection and RETAIN", () => {
+    app.resourceCountIs("AWS::DynamoDB::GlobalTable", 1);
+    app.hasResource("AWS::DynamoDB::GlobalTable", {
+      DeletionPolicy: "Retain",
+      Properties: Match.objectLike({
+        KeySchema: [{ AttributeName: "PK", KeyType: "HASH" }, { AttributeName: "SK", KeyType: "RANGE" }],
+        BillingMode: "PAY_PER_REQUEST",
+        Replicas: [Match.objectLike({
+          DeletionProtectionEnabled: true,
+          PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+        })],
+      }),
+    });
+  });
+
+  it("TTL on `ttl` (epoch seconds): only Delete Profile's marker sets it", () => {
+    app.hasResourceProperties("AWS::DynamoDB::GlobalTable", { TimeToLiveSpecification: { AttributeName: "ttl", Enabled: true } });
+  });
+
+  it("the API Lambda gets only single-item and query actions on the table (no Scan, no Batch*)", () => {
+    const [roleId] = Object.keys(app.findResources("AWS::IAM::Role")).filter((id) => id.startsWith("ApiFn"));
+    const statements = Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+      .filter((st: any) => [st.Action].flat().some((a: string) => a.startsWith("dynamodb:")));
+    expect(statements).toHaveLength(1);
+    // ConditionCheckItem: a transaction's ConditionCheck (a Reaction checks the Friendship) needs its own action.
+    expect([statements[0].Action].flat().sort()).toEqual([
+      "dynamodb:ConditionCheckItem", "dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem",
+    ]);
+    const [tableId] = Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"));
+    expect(statements[0].Resource).toEqual({ "Fn::GetAtt": [tableId, "Arn"] });
+  });
+
+  it("one Lambda handler for the API, one pre-sign-up trigger and the Notifier read the table (plus CDK helpers)", () => {
+    const fns = Object.entries(app.findResources("AWS::Lambda::Function")).filter(([, f]) => f.Properties.Environment?.Variables?.TABLE_NAME);
+    expect(fns.map(([id]) => id.replace(/[0-9A-F]{8}$/, "")).sort()).toEqual(["ApiFn", "NotifierFn", "PreSignUpFn"]);
+    for (const [, f] of fns) {
+      expect(f.Properties.Runtime).toBe("nodejs22.x");
+      expect(f.Properties.Architectures).toEqual(["arm64"]);
+    }
+  });
+});
+
+describe("auth", () => {
+  it("self sign-up is on only together with the Invite pre-sign-up trigger; password and passkey sign-in", () => {
+    // Self sign-up without the trigger would let anyone make a Profile: assert both in one place.
+    const [pool] = Object.values(app.findResources("AWS::Cognito::UserPool"));
+    expect(pool.Properties.AdminCreateUserConfig.AllowAdminCreateUserOnly).toBe(false);
+    const trigger = pool.Properties.LambdaConfig?.PreSignUp;
+    expect(trigger).toEqual({ "Fn::GetAtt": [preSignUpId(), "Arn"] });
+    expect(pool.Properties.UserPoolTier).toBe("ESSENTIALS");
+    expect([...pool.Properties.Policies.SignInPolicy.AllowedFirstAuthFactors].sort()).toEqual(["PASSWORD", "WEB_AUTHN"]);
+    expect(pool.Properties.WebAuthnRelyingPartyID).toBe("throne.ashershores.com");
+    expect(pool.Properties.WebAuthnUserVerification).toBe("required");
+    expect(pool.Properties.Policies.PasswordPolicy.MinimumLength).toBeGreaterThanOrEqual(16);
+    // Nothing to confirm by email or phone: the Invite is the proof (the trigger auto-confirms).
+    expect(pool.Properties.AutoVerifiedAttributes ?? []).toEqual([]);
+  });
+
+  it("the pre-sign-up trigger: only the table name; GetItem + UpdateItem on the table, AdminGetUser on this pool", () => {
+    const fn = app.findResources("AWS::Lambda::Function")[preSignUpId()];
+    expect(Object.keys(fn.Properties.Environment.Variables)).toEqual(["TABLE_NAME"]);
+    expect(fn.Properties.Handler).toMatch(/handler$/);
+    const roleId = fn.Properties.Role["Fn::GetAtt"][0];
+    const statements = Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement);
+    const [tableId] = Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"));
+    const [poolId] = Object.keys(app.findResources("AWS::Cognito::UserPool"));
+    expect(statements.map((st: any) => ({ actions: [st.Action].flat().sort(), resource: st.Resource }))).toEqual([
+      { actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"], resource: { "Fn::GetAtt": [tableId, "Arn"] } },
+      { actions: ["cognito-idp:AdminGetUser"], resource: { "Fn::GetAtt": [poolId, "Arn"] } },
+    ]);
+    // The function must not wait for the lookup policy (that would be pool -> trigger -> policy -> pool).
+    expect(JSON.stringify(app.findResources("AWS::Lambda::Function")[preSignUpId()].DependsOn ?? [])).not.toMatch(/PreSignUpUserLookup/);
+    // Only this pool may invoke it.
+    app.hasResourceProperties("AWS::Lambda::Permission", {
+      FunctionName: { "Fn::GetAtt": [preSignUpId(), "Arn"] },
+      Principal: "cognito-idp.amazonaws.com",
+      SourceArn: { "Fn::GetAtt": [Object.keys(app.findResources("AWS::Cognito::UserPool"))[0], "Arn"] },
+    });
+  });
+
+  it("the web client signs in through USER_AUTH (password or passkey) and refresh only", () => {
+    const [client] = Object.values(app.findResources("AWS::Cognito::UserPoolClient"));
+    expect([...client.Properties.ExplicitAuthFlows].sort()).toEqual(["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_AUTH"]);
+    expect(client.Properties.PreventUserExistenceErrors).toBe("ENABLED");
+  });
+
+  it("tokens last an hour and the session (refresh token) 7 days", () => {
+    app.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      GenerateSecret: false,
+      AccessTokenValidity: 60,
+      IdTokenValidity: 60,
+      RefreshTokenValidity: 7 * 24 * 60,
+    });
+  });
+
+  it("the API takes Cognito user-pool tokens only (no API key, no IAM, no other provider)", () => {
+    app.hasResourceProperties("AWS::AppSync::GraphQLApi", {
+      AuthenticationType: "AMAZON_COGNITO_USER_POOLS",
+      AdditionalAuthenticationProviders: Match.absent(),
+    });
+    app.resourceCountIs("AWS::AppSync::ApiKey", 0);
+  });
+});
+
+describe("API", () => {
+  it("doesn't describe itself and caps query depth and resolvers per request", () => {
+    app.hasResourceProperties("AWS::AppSync::GraphQLApi", { IntrospectionConfig: "DISABLED" });
+    const [api] = Object.values(app.findResources("AWS::AppSync::GraphQLApi"));
+    expect(api.Properties.QueryDepthLimit).toBe(QUERY_DEPTH_LIMIT);
+    expect(api.Properties.ResolverCountLimit).toBeLessThanOrEqual(5);
+  });
+
+  it("counts query depth the way AppSync does (root field = 1)", () => {
+    expect(queryDepth("query { me { id } }")).toBe(2);
+    expect(queryDepth("query { a { ... on X { b { c } } } }")).toBe(3);
+    expect(queryDepth("query Q { me { ...P } } fragment P on Profile { avatar { emoji } }")).toBe(3);
+  });
+
+  it("the depth cap is exactly the deepest selection the app sends (the Profile's Avatar)", () => {
+    // web/src/api/profile.ts selects `me { ... avatar { emoji color } }`; e2e/backend.ts refuses anything
+    // deeper than the cap, as AppSync does. Raise the cap when a real selection needs it, never "just in case".
+    expect(queryDepth("query Me($z: String) { me(homeZone: $z) { id displayName homeZone avatar { emoji color } } }")).toBe(QUERY_DEPTH_LIMIT);
+    // The Log selection (web/src/api/log.ts LOG) with its Reactions and Comments is just as deep.
+    expect(queryDepth(`query { myLogs(from: "a", to: "b") { ${WEB_LOG} } }`)).toBe(QUERY_DEPTH_LIMIT);
+    // The Summary selection (web/src/api/selections.ts SUMMARY) fits too: the Avatar is flat on SummaryPerson.
+    expect(queryDepth(`query { summaries { ${WEB_SUMMARY} } }`)).toBeLessThanOrEqual(QUERY_DEPTH_LIMIT);
+  });
+
+  it("has a Lambda resolver for every Query and Mutation field in schema/", () => {
+    const fields = rootFields(composeSchemaDir());
+    const wired = Object.values(app.findResources("AWS::AppSync::Resolver")).map((r) => `${r.Properties.TypeName}.${r.Properties.FieldName}`);
+    const expected = [...fields.Query.map((f) => `Query.${f}`), ...fields.Mutation.map((f) => `Mutation.${f}`)];
+    expect(wired.sort()).toEqual(expected.sort());
+  });
+
+  it("logs errors only, without request or response content (health data)", () => {
+    app.hasResourceProperties("AWS::AppSync::GraphQLApi", {
+      LogConfig: Match.objectLike({ FieldLogLevel: "ERROR", ExcludeVerboseContent: true }),
+    });
+  });
+});
+
+describe("push (least privilege)", () => {
+  const fnId = (prefix: string) => {
+    const ids = Object.keys(app.findResources("AWS::Lambda::Function")).filter((id) => id.startsWith(prefix));
+    expect(ids).toHaveLength(1);
+    return ids[0];
+  };
+  const roleOf = (id: string) => app.findResources("AWS::Lambda::Function")[id].Properties.Role["Fn::GetAtt"][0] as string;
+  /** Every statement in the inline policies attached to this role. */
+  const statementsOf = (roleId: string) =>
+    Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => JSON.stringify(p.Properties.Roles).includes(roleId))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement);
+  const actions = (st: any) => [st.Action].flat() as string[];
+  const tableArn = () => ({ "Fn::GetAtt": [Object.keys(app.findResources("AWS::DynamoDB::GlobalTable"))[0], "Arn"] });
+  const vapidArn = (name: string) => ({
+    "Fn::Join": ["", ["arn:aws:ssm:us-west-1:", { Ref: "AWS::AccountId" }, `:parameter/throne/vapid/${name}`]],
+  });
+
+  it("the Notifier reads the VAPID keys, reads/prunes the table and stores Summaries (PutItem + ConditionCheck), nothing more", () => {
+    const sts = statementsOf(roleOf(fnId("NotifierFn")));
+    const ddb = sts.filter((st: any) => actions(st).some((a) => a.startsWith("dynamodb:")));
+    expect(ddb).toHaveLength(1);
+    expect(actions(ddb[0]).sort()).toEqual(["dynamodb:ConditionCheckItem", "dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]);
+    expect(ddb[0].Resource).toEqual(tableArn());
+    const ssm = sts.filter((st: any) => actions(st).some((a) => a.startsWith("ssm:")));
+    expect(ssm).toEqual([expect.objectContaining({ Action: "ssm:GetParameter", Effect: "Allow" })]);
+    expect(ssm[0].Resource).toEqual([vapidArn("private"), vapidArn("public")]);
+    expect(sts.flatMap(actions).filter((a: string) => !a.startsWith("dynamodb:") && !a.startsWith("ssm:"))).toEqual([]);
+  });
+
+  it("the API Lambda has no SSM access and may only invoke the Notifier", () => {
+    const fn = app.findResources("AWS::Lambda::Function")[fnId("ApiFn")];
+    const sts = statementsOf(roleOf(fnId("ApiFn")));
+    expect(sts.flatMap(actions).filter((a: string) => a.startsWith("ssm:") || a.startsWith("kms:"))).toEqual([]);
+    const invoke = sts.filter((st: any) => actions(st).some((a) => a.startsWith("lambda:")));
+    expect(invoke).toHaveLength(1);
+    expect(actions(invoke[0])).toEqual(["lambda:InvokeFunction"]);
+    const notifierArn = { "Fn::GetAtt": [fnId("NotifierFn"), "Arn"] };
+    expect([invoke[0].Resource].flat()).toEqual([notifierArn, { "Fn::Join": ["", [notifierArn, ":*"]] }]);
+    expect(fn.Properties.Environment.Variables.NOTIFIER_FUNCTION).toEqual({ Ref: fnId("NotifierFn") });
+    // Nothing secret reaches the API: no VAPID parameter names in its env.
+    expect(JSON.stringify(fn.Properties.Environment)).not.toMatch(/vapid/i);
+  });
+
+  it("Delete Profile: the API Lambda may only AdminDeleteUser, on this user pool only; nobody else changes Cognito users", () => {
+    const fn = app.findResources("AWS::Lambda::Function")[fnId("ApiFn")];
+    const [poolId] = Object.keys(app.findResources("AWS::Cognito::UserPool"));
+    const cognito = statementsOf(roleOf(fnId("ApiFn"))).filter((st: any) => actions(st).some((a) => a.startsWith("cognito-idp:")));
+    expect(cognito).toEqual([expect.objectContaining({ Action: "cognito-idp:AdminDeleteUser", Effect: "Allow", Resource: { "Fn::GetAtt": [poolId, "Arn"] } })]);
+    expect(fn.Properties.Environment.Variables.USER_POOL_ID).toEqual({ Ref: poolId });
+    const others = Object.values(app.findResources("AWS::IAM::Policy"))
+      .filter((p: any) => !JSON.stringify(p.Properties.Roles).includes(roleOf(fnId("ApiFn"))))
+      .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+      .flatMap(actions);
+    // The pre-sign-up trigger may only look a username up (AdminGetUser, read-only).
+    expect(others.filter((a) => a.startsWith("cognito-idp:"))).toEqual(["cognito-idp:AdminGetUser"]);
+  });
+
+  it("only the Notifier and the VapidKeys function may touch the VAPID parameters", () => {
+    const readers = Object.entries(app.findResources("AWS::IAM::Policy"))
+      .filter(([, p]: any) => JSON.stringify(p.Properties.PolicyDocument).includes("ssm:"))
+      .map(([, p]: any) => JSON.stringify(p.Properties.Roles));
+    expect(readers).toHaveLength(2);
+    expect(readers.some((r) => r.includes(roleOf(fnId("NotifierFn"))))).toBe(true);
+    expect(readers.some((r) => r.includes(roleOf(fnId("VapidKeysFn"))))).toBe(true);
+    const vapidSts = statementsOf(roleOf(fnId("VapidKeysFn"))).filter((st: any) => actions(st).some((a) => a.startsWith("ssm:")));
+    expect(vapidSts.flatMap(actions).sort()).toEqual(["ssm:GetParameter", "ssm:PutParameter"]);
+    expect(vapidSts[0].Resource).toEqual([vapidArn("private"), vapidArn("public")]);
+    app.resourceCountIs("Custom::VapidKeys", 1);
+  });
+
+  it("an event push that fails is dropped, not retried (a retry could push twice)", () => {
+    app.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      FunctionName: { Ref: fnId("NotifierFn") },
+      MaximumRetryAttempts: 0,
+    });
+  });
+
+  it("nothing else may invoke the Notifier (no resource-based permission for any service)", () => {
+    const perms = Object.values(app.findResources("AWS::Lambda::Permission")).filter((p: any) =>
+      JSON.stringify(p.Properties.FunctionName).includes(fnId("NotifierFn")));
+    expect(perms).toEqual([]);
+  });
+
+  it("an hourly schedule (minute 0, UTC) runs the weekly Summary, never retried, with a role that can only invoke the Notifier", () => {
+    const schedules = Object.values(app.findResources("AWS::Scheduler::Schedule")) as any[];
+    expect(schedules).toHaveLength(1);
+    const [s] = schedules;
+    expect(s.Properties.ScheduleExpression).toBe("cron(0 * * * ? *)");
+    expect(s.Properties.State).toBe("ENABLED");
+    expect(s.Properties.Target.Arn).toEqual({ "Fn::GetAtt": [fnId("NotifierFn"), "Arn"] });
+    expect(s.Properties.Target.RetryPolicy.MaximumRetryAttempts).toBe(0);
+    expect(JSON.parse(s.Properties.Target.Input)).toEqual(SCHEDULED_RUN);
+    const roleId = s.Properties.Target.RoleArn["Fn::GetAtt"][0];
+    const sts = statementsOf(roleId);
+    expect(sts.flatMap(actions)).toEqual(["lambda:InvokeFunction"]);
+    const notifierArn = { "Fn::GetAtt": [fnId("NotifierFn"), "Arn"] };
+    expect(sts.flatMap((st: any) => [st.Resource].flat())).toEqual([notifierArn, { "Fn::Join": ["", [notifierArn, ":*"]] }]);
+  });
+});
+
+describe("public repo hygiene", () => {
+  it("synths with no AWS account ID in the template", () => {
+    expect(JSON.stringify(app.toJSON())).not.toMatch(/\b\d{12}\b/);
+  });
+});

@@ -5,3 +5,6 @@ cdk.out/
 .secrets/
 *.log
 .env*
+web/public/config.json
+.claude/worktrees/
+cdk-outputs.json

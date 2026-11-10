@@ -1,0 +1,12 @@
+/* The weekly Summary (ticket 10): the Home card and the /summary screen. Cards come from profile.css. */
+.summary-people, .awards { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.summary-person { display: flex; align-items: center; gap: 0.6rem; }
+.summary-numbers { display: grid; gap: 0.1rem; min-width: 0; flex: 1; }
+.summary-numbers .name { font-weight: 600; overflow-wrap: anywhere; }
+.summary-total { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; }
+.awards { padding-top: 0.6rem; border-top: 1px solid var(--border); gap: 0.35rem; }
+.summary-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.summary-screen h2.section { font-size: 1rem; margin: 1.5rem 0 0; color: var(--muted); }
+.latest-summary { justify-self: stretch; display: grid; gap: 0.25rem; text-align: left; }
+.latest-summary > a { justify-self: center; }
+.summary-first { margin-top: 1rem; }

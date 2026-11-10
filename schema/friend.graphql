@@ -1,0 +1,68 @@
+# Friends (ticket 06). Resolvers: api/src/resolvers/friend.ts; rules: shared/src/friend.ts.
+# Plain comments, not "descriptions": AppSync has rejected described types before.
+
+# Another Profile in a Friendship with the caller. Only Friends (and a Friend request's receiver) see
+# a Profile's Display name and Avatar.
+type Friend {
+  # The Friend's Profile id.
+  id: ID!
+  displayName: String!
+  avatar: Avatar!
+  # When the Friendship began, ISO 8601 UTC.
+  since: AWSDateTime!
+}
+
+# A Friend request someone sent the caller: the sender's Display name and Avatar, so they know who it is.
+type FriendRequest {
+  # The sender's Profile id (what accept and decline take).
+  id: ID!
+  displayName: String!
+  avatar: Avatar!
+  sentAt: AWSDateTime!
+}
+
+# A Friend request the caller sent and nobody has answered yet. Only the code the caller typed, never
+# the receiver's Display name: they aren't Friends yet.
+type SentFriendRequest {
+  # An opaque id for this request (what cancel takes). Never the receiver's Profile id: the caller
+  # only learns that once they are Friends.
+  id: ID!
+  # The Friend code it was sent to, as shown (e.g. 4KQ-9XM).
+  code: String!
+  sentAt: AWSDateTime!
+}
+
+enum FriendRequestOutcome {
+  # A Friend request is waiting for the other Profile.
+  SENT
+  # They had already sent the caller one, so now they are Friends.
+  FRIENDS
+}
+
+extend type Query {
+  # The caller's Friend code, as shown (e.g. 4KQ-9XM). The first call makes one.
+  myFriendCode: String!
+  # The caller's Friends, oldest Friendship first.
+  friends: [Friend!]!
+  # Friend requests waiting for the caller, oldest first.
+  friendRequests: [FriendRequest!]!
+  # Friend requests the caller sent that are still waiting, oldest first.
+  sentFriendRequests: [SentFriendRequest!]!
+}
+
+extend type Mutation {
+  # A new Friend code for the caller; the old one stops working ("not found").
+  regenerateFriendCode: String!
+  # Send a Friend request to whoever has this code. A bad code, the caller's own and an existing
+  # Friend's all fail the same way (NotFound). At most 10 a day.
+  sendFriendRequest(code: String!): FriendRequestOutcome!
+  # Accept a Friend request from `from`; refused if either side already has 3 Friends.
+  acceptFriendRequest(from: ID!): Friend!
+  # Decline a Friend request from `from`. Declining one that's gone succeeds.
+  declineFriendRequest(from: ID!): Boolean!
+  # Take back a Friend request the caller sent (`request` = its SentFriendRequest id). Cancelling one
+  # that's gone succeeds.
+  cancelFriendRequest(request: ID!): Boolean!
+  # End the Friendship with `friend`, for both. Ending one that's already over succeeds.
+  endFriendship(friend: ID!): Boolean!
+}
