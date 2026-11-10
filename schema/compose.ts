@@ -70,6 +70,34 @@ export function rootFields(sdl: string): { Query: string[]; Mutation: string[] }
  */
 export const QUERY_DEPTH_LIMIT = 3;
 
+/**
+ * AppSync's resolver count cap per request (infra sets it, e2e/backend.ts enforces it the same way). Only
+ * Query/Mutation fields have resolvers (the one Lambda), so a request uses one per root field it selects.
+ * It must cover the widest operation the app sends (the Friends panel: myFriendCode, friends,
+ * friendRequests, sentFriendRequests). Past the cap AppSync answers "Resolver invocation limit reached"
+ * and nulls the rest. infra/test/webQueries.test.ts pins it to the widest real operation.
+ */
+export const RESOLVER_COUNT_LIMIT = 4;
+
+/** Resolvers one request invokes: its root fields (fragments spread at the root count too). */
+export function resolverCount(query: string): number {
+  const doc = parse(query);
+  const fragments = new Map<string, SelectionSetNode>();
+  for (const d of doc.definitions) if (d.kind === Kind.FRAGMENT_DEFINITION) fragments.set(d.name.value, d.selectionSet);
+  const count = (set: SelectionSetNode | undefined): number => {
+    let n = 0;
+    for (const s of set?.selections ?? []) {
+      if (s.kind === Kind.FIELD) n += 1;
+      else if (s.kind === Kind.INLINE_FRAGMENT) n += count(s.selectionSet);
+      else n += count(fragments.get(s.name.value));
+    }
+    return n;
+  };
+  let widest = 0;
+  for (const d of doc.definitions) if (d.kind === Kind.OPERATION_DEFINITION) widest = Math.max(widest, count(d.selectionSet));
+  return widest;
+}
+
 /** The deepest field in a query, counted the way AppSync does (root field = 1; fragments add no depth). */
 export function queryDepth(query: string): number {
   const doc = parse(query);

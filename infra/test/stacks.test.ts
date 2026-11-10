@@ -1,7 +1,7 @@
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";
-import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
+import { QUERY_DEPTH_LIMIT, RESOLVER_COUNT_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
 import { SCHEDULED_RUN } from "../../shared/src/push";
 import { LOG as WEB_LOG, SUMMARY as WEB_SUMMARY } from "../../web/src/api/selections";
 import { buildApp } from "../lib/app";
@@ -131,7 +131,7 @@ describe("API", () => {
     app.hasResourceProperties("AWS::AppSync::GraphQLApi", { IntrospectionConfig: "DISABLED" });
     const [api] = Object.values(app.findResources("AWS::AppSync::GraphQLApi"));
     expect(api.Properties.QueryDepthLimit).toBe(QUERY_DEPTH_LIMIT);
-    expect(api.Properties.ResolverCountLimit).toBeLessThanOrEqual(5);
+    expect(api.Properties.ResolverCountLimit).toBe(RESOLVER_COUNT_LIMIT);
   });
 
   it("counts query depth the way AppSync does (root field = 1)", () => {

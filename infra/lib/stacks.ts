@@ -16,7 +16,7 @@ import {
   custom_resources as cr,
 } from "aws-cdk-lib";
 import type { Construct } from "constructs";
-import { QUERY_DEPTH_LIMIT, composeSchemaDir, rootFields } from "../../schema/compose";
+import { QUERY_DEPTH_LIMIT, RESOLVER_COUNT_LIMIT, composeSchemaDir, rootFields } from "../../schema/compose";
 import { SCHEDULED_RUN } from "../../shared/src/push";
 import { DYNAMO_ACCESS, type LambdaName } from "../../api/src/dynamoAccess";
 
@@ -184,7 +184,7 @@ export class AppStack extends Stack {
       // e2e/backend.ts refuses anything deeper, as AppSync does).
       introspectionConfig: appsync.IntrospectionConfig.DISABLED,
       queryDepthLimit: QUERY_DEPTH_LIMIT,
-      resolverCountLimit: 2,
+      resolverCountLimit: RESOLVER_COUNT_LIMIT, // root fields per request (schema/compose.ts)
     }));
 
     // Every Query and Mutation field goes to the Lambda, which dispatches by field name
