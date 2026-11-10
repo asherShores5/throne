@@ -2,7 +2,7 @@
 // table, behind a GraphQL executor built from the composed schema/*.graphql, plus just enough Cognito
 // for the web app to sign in. Nothing here talks to AWS.
 import { buildSchema, defaultFieldResolver, execute, parse, type GraphQLFieldResolver } from "graphql";
-import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth } from "../schema/compose";
+import { QUERY_DEPTH_LIMIT, RESOLVER_COUNT_LIMIT, composeSchemaDir, queryDepth, resolverCount } from "../schema/compose";
 
 /** A Cognito user the fake knows: sign-in username and the sub that identifies their Profile. */
 export interface User {
@@ -62,6 +62,7 @@ export async function graphql(token: string | undefined, query: string, variable
   // AppSync's cap (infra/lib/stacks.ts). Live it nulls the fields past the cap; failing loudly here is what
   // catches a selection that grew too deep.
   if (queryDepth(query) > QUERY_DEPTH_LIMIT) return { errors: [{ message: `Query depth limit reached. (${queryDepth(query)} > ${QUERY_DEPTH_LIMIT})` }] };
+  if (resolverCount(query) > RESOLVER_COUNT_LIMIT) return { errors: [{ message: `Resolver invocation limit reached. (${resolverCount(query)} > ${RESOLVER_COUNT_LIMIT})` }] };
   const fieldResolver: GraphQLFieldResolver<unknown, unknown> = async (src, args, ctx, info) => {
     const parent = info.parentType.name;
     if (parent !== "Query" && parent !== "Mutation") return defaultFieldResolver(src, args, ctx, info);

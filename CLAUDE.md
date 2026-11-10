@@ -160,6 +160,9 @@ code and UI.
   `infra/test/stacks.test.ts`; e2e refuses deeper queries. `infra/test/webQueries.test.ts` reads every GraphQL
   operation in `web/src` (selections must be plain string constants), validates each against the schema, checks
   the deepest equals the cap, and that every root field is used by the app.
+- **`RESOLVER_COUNT_LIMIT` is the most root fields one operation selects** (schema/compose.ts; the Friends
+  panel's 4 now). Live AppSync answers "Resolver invocation limit reached" and nulls the rest; the first deploy
+  shipped with 2 and broke Friends. `webQueries.test.ts` pins it to the widest real operation and e2e refuses wider.
 - **Never write a Log item without the `rv` condition** (`sameResponses`/`unchangedSince` in `resolvers/log.ts`):
   a blind Put or Delete would wipe a Reaction or Comment that landed after the read (or leave its pointer).
   The only exceptions, each commented where it happens: `createLog`'s Put (the `LOGID#` `attribute_not_exists` in

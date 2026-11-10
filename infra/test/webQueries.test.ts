@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { buildSchema, parse, validate } from "graphql";
 import { describe, expect, it } from "vitest";
-import { QUERY_DEPTH_LIMIT, composeSchemaDir, queryDepth, rootFields } from "../../schema/compose";
+import { QUERY_DEPTH_LIMIT, RESOLVER_COUNT_LIMIT, composeSchemaDir, queryDepth, resolverCount, rootFields } from "../../schema/compose";
 
 const WEB_SRC = path.join(__dirname, "..", "..", "web", "src");
 const APPSYNC_PRELUDE = "scalar AWSJSON\nscalar AWSDate\nscalar AWSDateTime\n";
@@ -54,6 +54,14 @@ describe("the web app's GraphQL operations", () => {
     const over = ops.filter(({ op }) => queryDepth(op) > QUERY_DEPTH_LIMIT).map(({ file, op }) => `${file}: depth ${queryDepth(op)}: ${op.trim().slice(0, 80)}`);
     expect(over).toEqual([]);
     expect(Math.max(...ops.map(({ op }) => queryDepth(op)))).toBe(QUERY_DEPTH_LIMIT);
+  });
+
+  it("fit under RESOLVER_COUNT_LIMIT, and the widest is exactly the cap", () => {
+    // Live AppSync answers "Resolver invocation limit reached" and nulls the rest (the Friends panel broke
+    // this way on the first deploy with a cap of 2).
+    const over = ops.filter(({ op }) => resolverCount(op) > RESOLVER_COUNT_LIMIT).map(({ file, op }) => `${file}: ${resolverCount(op)} resolvers: ${op.trim().slice(0, 80)}`);
+    expect(over).toEqual([]);
+    expect(Math.max(...ops.map(({ op }) => resolverCount(op)))).toBe(RESOLVER_COUNT_LIMIT);
   });
 
   it("use every root field the API exposes (no unused API surface)", () => {
