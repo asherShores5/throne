@@ -1,6 +1,7 @@
 // The caller's Profile (tickets 01, 02), at PROFILE#<sub> / PROFILE. Schema: schema/profile.graphql.
 import { GetCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { cleanDisplayName, isAvatar, isHomeZone, newProfile, type ProfileFields } from "@throne/shared";
+import { cleanDisplayName, isAvatar, isHomeZone, newProfile, type ProfileFields, randomAvatarColor } from "@throne/shared";
+import { rand } from "../random";
 import { now } from "../clock";
 import { invalid } from "../errors";
 import { DIRECTORY_PK, PROFILE_SK, TABLE, ddb, directoryKey, isCancelled, isConditionFailed, profilePk, queryPrefix } from "../table";
@@ -87,7 +88,7 @@ async function followDevice(p: Profile, deviceZone: unknown): Promise<Profile> {
 export async function ensureProfile(ctx: Ctx, deviceZone: unknown): Promise<Profile> {
   const found = await read(ctx.sub);
   if (found) return followDevice(found, deviceZone);
-  const fields = newProfile(deviceZone);
+  const fields = newProfile(deviceZone, randomAvatarColor(rand()));
   try {
     // The record and its directory entry together (the Notifier finds Profiles through the directory).
     await ddb().send(

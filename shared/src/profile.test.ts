@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  AVATAR_COLORS, AVATAR_EMOJI, DEFAULT_HOME_ZONE, DELETE_CONFIRM_WORD, cleanDisplayName, homeZoneOr, isAvatar, isDeleteConfirmed, isHomeZone, newProfile,
+  AVATAR_COLORS, AVATAR_EMOJI, DEFAULT_HOME_ZONE, DELETE_CONFIRM_WORD, cleanDisplayName, homeZoneOr, isAvatar, isDeleteConfirmed, isHomeZone, newProfile, randomAvatarColor,
 } from "./profile";
 
 describe("Avatar choices", () => {
@@ -38,6 +38,20 @@ describe("newProfile", () => {
       homeZone: "America/Denver",
     });
     expect(newProfile("bogus").homeZone).toBe("UTC");
+    expect(newProfile("UTC", "#1c7ed6").avatar.color).toBe("#1c7ed6");
+  });
+});
+
+describe("randomAvatarColor", () => {
+  it("maps [0, 1) evenly onto the palette and never leaves it", () => {
+    expect(randomAvatarColor(0)).toBe(AVATAR_COLORS[0]);
+    expect(randomAvatarColor(0.999999)).toBe(AVATAR_COLORS[AVATAR_COLORS.length - 1]);
+    expect(AVATAR_COLORS.map((_, i) => randomAvatarColor((i + 0.5) / AVATAR_COLORS.length))).toEqual([...AVATAR_COLORS]);
+    expect(randomAvatarColor(1)).toBe(AVATAR_COLORS[AVATAR_COLORS.length - 1]);
+    expect(randomAvatarColor(-0.1)).toBe(AVATAR_COLORS[0]);
+  });
+  it("spreads new Profiles across colors", () => {
+    expect(new Set(Array.from({ length: 200 }, () => randomAvatarColor())).size).toBeGreaterThan(4);
   });
 });
 
