@@ -1,7 +1,8 @@
 // The caller's Profile (ticket 01): created on the first call by a new sign-in, always found by the
 // Cognito sub. Through the real handler on the in-memory table (testing/harness.ts).
 import { beforeEach, describe, expect, it } from "vitest";
-import { harness } from "./testing/harness";
+import { AVATAR_COLORS } from "@throne/shared";
+import { harness, setRandom } from "./testing/harness";
 
 const h = harness();
 beforeEach(() => h.reset());
@@ -12,6 +13,16 @@ describe("first sign-in", () => {
   it("creates the Profile: placeholder Display name, default Avatar, Home zone from the device", async () => {
     const me = await h.call(h.A, "me", { homeZone: "America/Los_Angeles" });
     expect(me).toEqual({ id: h.A.sub, ...PLACEHOLDER, homeZone: "America/Los_Angeles" });
+  });
+
+  it("starts the Avatar on a random palette color (not always the same one)", async () => {
+    setRandom(() => 0.5);
+    try {
+      const me = await h.call(h.B, "me", { homeZone: "UTC" });
+      expect(me.avatar.color).toBe(AVATAR_COLORS[4]);
+    } finally {
+      setRandom(() => 0);
+    }
   });
 
   it("creates exactly one Profile record, however many calls (even at once) come first", async () => {

@@ -5,7 +5,7 @@ import { hasHiddenCharacters } from "./text";
 /** Avatar emoji choices; the first is the default for a new Profile. */
 export const AVATAR_EMOJI = ["🚽", "👑", "🦆", "🐸", "🐙", "🦊", "🐼", "🌵", "🍑", "🌈", "⭐", "🔥"] as const;
 
-/** Avatar colors: a fixed palette of 8, readable behind an emoji in light and dark. The first is the default. */
+/** Avatar colors: a fixed palette of 8, readable behind an emoji in light and dark. A new Profile starts on a random one (randomAvatarColor). */
 export const AVATAR_COLORS = ["#7c5cff", "#e8590c", "#2b8a3e", "#1c7ed6", "#d6336c", "#f0b400", "#0c8599", "#868e96"] as const;
 
 export const DISPLAY_NAME_MAX = 24;
@@ -62,11 +62,20 @@ export function isAvatar(a: unknown): a is Avatar {
   );
 }
 
-/** A brand-new Profile: placeholder Display name, default Avatar, Home zone from the device. */
-export function newProfile(deviceZone: unknown): ProfileFields {
+/**
+ * A color from the palette for a new Avatar, picked from `r` in [0, 1) (Math.random by default), so new
+ * Profiles don't all start the same color and Friends are easier to tell apart.
+ */
+export function randomAvatarColor(r: number = Math.random()): (typeof AVATAR_COLORS)[number] {
+  const i = Math.floor(r * AVATAR_COLORS.length);
+  return AVATAR_COLORS[Math.min(Math.max(i, 0), AVATAR_COLORS.length - 1)];
+}
+
+/** A brand-new Profile: placeholder Display name, default emoji on `color`, Home zone from the device. */
+export function newProfile(deviceZone: unknown, color: (typeof AVATAR_COLORS)[number] = AVATAR_COLORS[0]): ProfileFields {
   return {
     displayName: PLACEHOLDER_DISPLAY_NAME,
-    avatar: { emoji: AVATAR_EMOJI[0], color: AVATAR_COLORS[0] },
+    avatar: { emoji: AVATAR_EMOJI[0], color },
     homeZone: homeZoneOr(deviceZone),
   };
 }

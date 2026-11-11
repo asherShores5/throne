@@ -1,6 +1,6 @@
 import "./profile.css";
 import { useState } from "react";
-import { AVATAR_COLORS, AVATAR_EMOJI, cleanDisplayName, cleanUsername, inviteTokenFromHash, passwordProblem, type Avatar } from "@throne/shared";
+import { AVATAR_EMOJI, randomAvatarColor, cleanDisplayName, cleanUsername, inviteTokenFromHash, passwordProblem, type Avatar } from "@throne/shared";
 import { InviteRefusedError, isSignedIn, signUpWithInvite } from "../auth";
 import { deviceZone, updateProfile } from "../api/profile";
 import { navigate, onLink } from "../route";
@@ -16,7 +16,7 @@ export function Join() {
   const [alreadyIn] = useState(isSignedIn);
   const [refused, setRefused] = useState(false);
   const [displayName, setDisplayName] = useState("");
-  const [avatar, setAvatar] = useState<Avatar>({ emoji: AVATAR_EMOJI[0], color: AVATAR_COLORS[0] });
+  const [avatar, setAvatar] = useState<Avatar>(() => ({ emoji: AVATAR_EMOJI[0], color: randomAvatarColor() }));
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);

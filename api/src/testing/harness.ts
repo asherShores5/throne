@@ -27,6 +27,11 @@ const { handler, setDocClient, setEventSink, setUserDeleter } = await import("..
 const { QUERY_FIELDS } = await import("../resolvers");
 const { handler: preSignUp, setUserLookup } = await import("../preSignUp");
 const notifier = await import("../notifier");
+const { setRandom } = await import("../random");
+// A new Profile's Avatar color is random in production; pinned to the first color here (and in e2e) so
+// expectations stay fixed. A test that wants another color calls setRandom itself.
+setRandom(() => 0);
+export { setRandom };
 
 /** One push the fake push service accepted. */
 export interface SentPush {
